@@ -2,6 +2,7 @@
 
 #include "tensor_from_weighted_set_feature.h"
 #include "constant_tensor_executor.h"
+#include "tensor_from_enum_attribute_executor.h"
 #include "utils.h"
 #include "tensor_from_attribute_executor.h"
 #include "weighted_set_parser.hpp"
@@ -97,6 +98,9 @@ createAttributeExecutor(const search::fef::IQueryEnvironment &env,
         // Using WeightedStringContent ensures that the integer values are converted
         // to strings while extracting them from the attribute.
         return stash.create<TensorFromAttributeExecutor<WeightedStringContent>>(attribute, valueType);
+    }
+    if (attribute->isStringType() && attribute->hasEnum()) {
+        return stash.create<TensorFromEnumAttributeExecutor>(*attribute, valueType);
     }
     // When the underlying attribute is of type string we can reference these values
     // using WeightedConstCharContent.

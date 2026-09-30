@@ -6,6 +6,7 @@
 #include "tensor_from_attribute_executor.h"
 #include <vespa/searchlib/fef/properties.h>
 #include <vespa/searchlib/fef/feature_type.h>
+#include "tensor_from_enum_attribute_executor.h"
 #include <vespa/searchcommon/attribute/attributecontent.h>
 #include <vespa/searchcommon/attribute/iattributevector.h>
 #include <vespa/eval/eval/fast_value.h>
@@ -91,6 +92,9 @@ createAttributeExecutor(const search::fef::IQueryEnvironment &env,
         // Using WeightedStringContent ensures that the integer values are converted
         // to strings while extracting them from the attribute.
         return stash.create<TensorFromAttributeExecutor<WeightedStringContent>>(attribute, valueType);
+    }
+    if (attribute->isStringType() && attribute->hasEnum()) {
+        return stash.create<TensorFromEnumAttributeExecutor>(*attribute, valueType);
     }
     // When the underlying attribute is of type string we can reference these values
     // using WeightedConstCharContent.
