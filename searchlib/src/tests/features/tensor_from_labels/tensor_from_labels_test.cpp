@@ -231,4 +231,68 @@ TEST(TensorFromLabelsTest, require_that_empty_tensor_is_created_if_query_paramet
     EXPECT_EQ(*make_empty("tensor(null{})"), f.execute());
 }
 
+// Tests for many documents using the same labels:
+
+struct ManyDocsFixture {
+    BlueprintFactory factory;
+    FtFeatureTest    test;
+    ManyDocsFixture(const std::string& feature, AttributePtr attr) : factory(), test(factory, feature) {
+        setup_search_features(factory);
+        test.getIndexEnv().getAttributeMap().add(std::move(attr));
+        EXPECT_TRUE(test.setup());
+    }
+    TensorSpec execute(uint32_t docid) { return TensorSpec::from_value(test.resolveObjectFeature(docid)); }
+};
+
+TEST(TensorFromLabelsTest, require_that_array_string_attribute_gives_expected_tensors_for_many_documents) {
+    constexpr uint32_t num_docs = 100;
+    auto               attr = AttributeFactory::createAttribute("astr", AVC(AVBT::STRING, AVCT::ARRAY));
+    attr->addReservedDoc();
+    attr->addDocs(num_docs);
+    auto&                                 astr = dynamic_cast<StringAttribute&>(*attr);
+    std::vector<std::vector<std::string>> docs(num_docs + 1);
+    for (uint32_t docid = 1; docid <= num_docs; ++docid) {
+        for (uint32_t i = 0; i < (docid % 4); ++i) {
+            docs[docid].push_back("l" + std::to_string((docid + i) % 10));
+        }
+        if (((docid % 3) == 0) && !docs[docid].empty()) {
+            docs[docid].push_back(docs[docid][0]);
+        }
+        for (const auto& label : docs[docid]) {
+            astr.append(docid, label, 0);
+        }
+    }
+    attr->commit();
+    ManyDocsFixture f("tensorFromLabels(attribute(astr),dim)", attr);
+    for (uint32_t docid = num_docs; docid >= 1; --docid) {
+        TensorSpec expect("tensor(dim{})");
+        for (const auto& label : docs[docid]) {
+            expect.add({{"dim", label}}, 1.0);
+        }
+        EXPECT_EQ(expect, f.execute(docid)) << "docid " << docid;
+    }
+}
+
+TEST(TensorFromLabelsTest, require_that_single_value_string_attribute_gives_expected_tensors_for_many_documents) {
+    constexpr uint32_t num_docs = 100;
+    auto               attr = AttributeFactory::createAttribute("sstr", AVC(AVBT::STRING, AVCT::SINGLE));
+    attr->addReservedDoc();
+    attr->addDocs(num_docs);
+    auto& sstr = dynamic_cast<StringAttribute&>(*attr);
+    for (uint32_t docid = 1; docid <= num_docs; ++docid) {
+        if ((docid % 3) != 0) {
+            sstr.update(docid, "s" + std::to_string(docid % 7));
+        }
+    }
+    attr->commit();
+    ManyDocsFixture f("tensorFromLabels(attribute(sstr))", attr);
+    for (uint32_t docid = 1; docid <= num_docs; ++docid) {
+        TensorSpec expect("tensor(sstr{})");
+        if ((docid % 3) != 0) {
+            expect.add({{"sstr", "s" + std::to_string(docid % 7)}}, 1.0);
+        }
+        EXPECT_EQ(expect, f.execute(docid)) << "docid " << docid;
+    }
+}
+
 GTEST_MAIN_RUN_ALL_TESTS()

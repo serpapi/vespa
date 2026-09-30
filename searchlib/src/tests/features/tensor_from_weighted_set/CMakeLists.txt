@@ -7,3 +7,11 @@ vespa_add_executable(searchlib_tensor_from_weighted_set_test_app TEST
     searchlib_test
 )
 vespa_add_test(NAME searchlib_tensor_from_weighted_set_test_app COMMAND searchlib_tensor_from_weighted_set_test_app)
+vespa_add_executable(searchlib_tensor_from_weighted_set_benchmark_app TEST
+    SOURCES
+    tensor_from_weighted_set_benchmark.cpp
+    DEPENDS
+    vespa_searchlib
+    GTest::gtest
+)
+vespa_add_test(NAME searchlib_tensor_from_weighted_set_benchmark_app COMMAND searchlib_tensor_from_weighted_set_benchmark_app BENCHMARK)
