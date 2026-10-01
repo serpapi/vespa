@@ -6,7 +6,8 @@
 #include <vespa/eval/eval/memory_usage_stuff.h>
 #include <vespa/searchcommon/attribute/iattributevector.h>
 
-#include <vespa/vespalib/stllike/hash_map.hpp>
+#include <algorithm>
+#include <cassert>
 
 using search::attribute::CollectionType;
 using search::attribute::IAttributeVector;
@@ -28,6 +29,35 @@ std::unique_ptr<vespalib::eval::Value> make_empty(const ValueType& type) {
 }
 
 } // namespace
+
+void TensorFromEnumAttributeExecutor::LabelIdMap::grow() {
+    std::vector<Slot> old(std::max(size_t(64), _slots.size() * 2));
+    old.swap(_slots);
+    size_t mask = _slots.size() - 1;
+    for (const Slot& slot : old) {
+        if (slot.handle != 0) {
+            size_t i = hash(slot.handle) & mask;
+            while (_slots[i].handle != 0) {
+                i = (i + 1) & mask;
+            }
+            _slots[i] = slot;
+        }
+    }
+}
+
+void TensorFromEnumAttributeExecutor::LabelIdMap::insert(EnumHandle handle, string_id label) {
+    assert(handle != 0);
+    ++_size;
+    if ((_size * 2) > _slots.size()) {
+        grow();
+    }
+    size_t mask = _slots.size() - 1;
+    size_t i = hash(handle) & mask;
+    while (_slots[i].handle != 0) {
+        i = (i + 1) & mask;
+    }
+    _slots[i] = Slot{handle, label};
+}
 
 TensorFromEnumAttributeExecutor::Output::Output(const ValueType& type, const StringIdVector& labels)
     : _type(type), _labels(labels), _index(), _cells() {
@@ -79,7 +109,7 @@ string_id TensorFromEnumAttributeExecutor::resolve_label(EnumHandle value) {
     if (_caching) {
         if (_cached_label_ids.size() < max_cached_labels) {
             string_id id = _cached_labels.add(label);
-            _cached_label_ids.insert(std::make_pair(value, id));
+            _cached_label_ids.insert(value, id);
             if (_cached_label_ids.size() == max_cached_labels) {
                 _hits = 0;
                 _misses = 0;
@@ -117,10 +147,9 @@ void TensorFromEnumAttributeExecutor::execute(uint32_t docid) {
     _labels.clear();
     _cells.clear();
     for (const auto& value : _attr_buffer) {
-        auto itr = _cached_label_ids.find(value.value());
-        if (itr != _cached_label_ids.end()) {
+        if (const string_id* id = _cached_label_ids.find(value.value())) {
             ++_hits;
-            _labels.push_back(itr->second);
+            _labels.push_back(*id);
         } else {
             _labels.push_back(resolve_label(value.value()));
         }
