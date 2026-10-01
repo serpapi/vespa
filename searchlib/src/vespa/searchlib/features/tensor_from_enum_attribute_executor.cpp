@@ -3,15 +3,17 @@
 #include "tensor_from_enum_attribute_executor.h"
 
 #include <vespa/eval/eval/fast_value.h>
+#include <vespa/eval/eval/memory_usage_stuff.h>
 #include <vespa/searchcommon/attribute/iattributevector.h>
-#include <vespa/searchlib/tensor/fast_value_view.h>
 
 #include <vespa/vespalib/stllike/hash_map.hpp>
 
 using search::attribute::CollectionType;
 using search::attribute::IAttributeVector;
-using search::tensor::FastValueView;
+using vespalib::MemoryUsage;
 using vespalib::string_id;
+using vespalib::StringIdVector;
+using vespalib::eval::FastAddrMap;
 using vespalib::eval::FastValueBuilderFactory;
 using vespalib::eval::TypedCells;
 using vespalib::eval::ValueType;
@@ -27,6 +29,28 @@ std::unique_ptr<vespalib::eval::Value> make_empty(const ValueType& type) {
 
 } // namespace
 
+TensorFromEnumAttributeExecutor::Output::Output(const ValueType& type, const StringIdVector& labels)
+    : _type(type), _labels(labels), _index(), _cells() {
+}
+
+TensorFromEnumAttributeExecutor::Output::~Output() = default;
+
+void TensorFromEnumAttributeExecutor::Output::reset(std::span<const double> cells) {
+    _index.emplace(1, _labels, cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) {
+        _index->map.add_mapping(FastAddrMap::hash_label(_labels[i]));
+    }
+    _cells = TypedCells(cells);
+}
+
+MemoryUsage TensorFromEnumAttributeExecutor::Output::get_memory_usage() const {
+    MemoryUsage usage = vespalib::eval::self_memory_usage<Output>();
+    if (_index) {
+        usage.merge(_index->map.estimate_extra_memory_usage());
+    }
+    return usage;
+}
+
 TensorFromEnumAttributeExecutor::TensorFromEnumAttributeExecutor(const IAttributeVector& attribute,
                                                                  const ValueType&        type)
     : _attribute(attribute),
@@ -41,7 +65,7 @@ TensorFromEnumAttributeExecutor::TensorFromEnumAttributeExecutor(const IAttribut
       _labels(),
       _cells(),
       _empty_output(make_empty(_type)),
-      _output(),
+      _output(_type, _labels),
       _is_single_value(attribute.getCollectionType() == CollectionType::SINGLE) {
     _attr_buffer.allocate(_attribute.getMaxValueCount());
     _labels.reserve(_attr_buffer.capacity());
@@ -102,8 +126,8 @@ void TensorFromEnumAttributeExecutor::execute(uint32_t docid) {
         }
         _cells.push_back(value.weight());
     }
-    _output = std::make_unique<FastValueView>(_type, _labels, TypedCells(_cells), 1, _cells.size());
-    outputs().set_object(0, *_output);
+    _output.reset(_cells);
+    outputs().set_object(0, _output);
 }
 
 } // namespace search::features
