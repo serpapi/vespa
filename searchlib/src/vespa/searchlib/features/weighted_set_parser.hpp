@@ -18,7 +18,7 @@ template <typename OutputType> void WeightedSetParser::parse(const std::string& 
         while (!s.empty()) {
             std::string::size_type commaPos(s.find(','));
             std::string_view       item(s.substr(0, commaPos));
-            std::string::size_type colonPos(item.find(':'));
+            std::string::size_type colonPos(item.rfind(':'));
             if (colonPos != std::string::npos) {
                 std::string            tmpKey(item.substr(0, colonPos));
                 std::string::size_type start(tmpKey.find_first_not_of(' '));
