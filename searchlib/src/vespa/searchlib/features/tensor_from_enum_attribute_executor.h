@@ -7,7 +7,6 @@
 #include <vespa/eval/eval/value_type.h>
 #include <vespa/searchcommon/attribute/attributecontent.h>
 #include <vespa/searchlib/fef/featureexecutor.h>
-#include <vespa/vespalib/stllike/hash_map.h>
 #include <vespa/vespalib/util/shared_string_repo.h>
 
 #include <memory>
@@ -55,8 +54,38 @@ private:
     };
 
     using EnumHandle = attribute::IAttributeVector::EnumHandle;
-    using LabelIdMap = vespalib::hash_map<EnumHandle, vespalib::string_id, vespalib::hash<EnumHandle>,
-                                          std::equal_to<>, vespalib::hashtable_base::and_modulator>;
+    // Open addressing map from enum handle to label, at most half full. Enum handle 0 is the
+    // invalid entry ref, never a value, so it marks a free slot.
+    class LabelIdMap {
+        struct Slot {
+            EnumHandle          handle;
+            vespalib::string_id label;
+        };
+        std::vector<Slot> _slots;
+        size_t            _size;
+
+        static size_t hash(EnumHandle handle) noexcept { return (uint64_t(handle) * 0x9e3779b97f4a7c15ULL) >> 32; }
+        void grow();
+
+    public:
+        LabelIdMap() noexcept : _slots(), _size(0) {}
+        size_t size() const noexcept { return _size; }
+        const vespalib::string_id* find(EnumHandle handle) const noexcept {
+            if (_slots.empty()) {
+                return nullptr;
+            }
+            size_t mask = _slots.size() - 1;
+            for (size_t i = hash(handle) & mask;; i = (i + 1) & mask) {
+                if (_slots[i].handle == 0) {
+                    return nullptr;
+                }
+                if (_slots[i].handle == handle) {
+                    return &_slots[i].label;
+                }
+            }
+        }
+        void insert(EnumHandle handle, vespalib::string_id label);
+    };
 
     const attribute::IAttributeVector&     _attribute;
     const vespalib::eval::ValueType        _type;
