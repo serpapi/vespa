@@ -7,3 +7,11 @@ vespa_add_executable(searchlib_sourceblender_test_app TEST
     searchlib_test
 )
 vespa_add_test(NAME searchlib_sourceblender_test_app COMMAND searchlib_sourceblender_test_app)
+vespa_add_executable(searchlib_sourceblender_benchmark_app TEST
+    SOURCES
+    sourceblender_benchmark.cpp
+    DEPENDS
+    vespa_searchlib
+    searchlib_test
+)
+# Note: the benchmark is not run as a unit test, so vespa_add_test() is not specified for it.
