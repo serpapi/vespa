@@ -1,0 +1,21 @@
+    98.67%     0.00%  [.] vespalib::ThreadStackExecutorBase::run                                                                                                
+    98.67%     0.00%  [.] vespalib::unnamed_nonblocking_executor                                                                                                
+    98.66%     0.00%  [.] vespalib::CpuUsage::wrap(std::unique_ptr<vespalib::Executor::Task, std::default_delete<vespalib::Executor::Task> >, vespalib::CpuUsage
+    98.64%     0.00%  [.] 0x00007f7b4e418b23                                                                                                                    
+    98.63%     0.00%  [.] search::diskindex::FieldMergerTask::run                                                                                               
+    96.70%     0.00%  [.] search::diskindex::FieldMerger::merge_postings_main                                                                                   
+    94.06%     2.19%  [.] search::PostingPriorityQueueMerger<search::diskindex::FieldReader, search::diskindex::FieldWriter>::mergeHeap                         
+    56.03%     3.30%  [.] search::diskindex::FieldReader::read                                                                                                  
+    48.40%    32.92%  [.] search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features                                                                   
+    17.92%     0.01%  [.] search::diskindex::Zc4PostingWriter<true>::flush_word_with_skip                                                                       
+    17.90%     0.07%  [.] search::diskindex::FieldWriter::newWord                                                                                               
+    17.80%     0.02%  [.] search::diskindex::FieldWriter::flush                                                                                                 
+    15.76%     0.03%  [.] search::diskindex::Zc4PostingWriter<true>::flush_word                                                                                 
+    13.10%     3.30%  [.] search::diskindex::Zc4PostingWriter<true>::write_docid_and_features                                                                   
+     9.60%     9.59%  [.] search::bitcompression::EG2PosOccDecodeContext<true>::readFeatures                                                                    
+     8.32%     8.31%  [.] search::diskindex::Zc4PostingWriterBase::calc_skip_info                                                                               
+     7.81%     7.81%  [.] search::bitcompression::EncodeContext64EBase<true>::writeBits                                                                         
+     7.43%     7.42%  [.] search::bitcompression::FeatureEncodeContext<true>::writeBits                                                                         
+     3.43%     0.06%  [.] search::diskindex::PageDict4FileSeqRead::readWord                                                                                     
+     3.40%     3.40%  [.] search::diskindex::Zc4PostingReaderBase::NoSkip::read                                                                                 
+     3.34%     3.34%  [.] search::PostingPriorityQueue<search::diskindex::FieldReader>::adjust                                                                  

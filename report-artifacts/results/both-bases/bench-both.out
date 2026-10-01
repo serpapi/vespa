@@ -1,0 +1,6 @@
+[09:56:19] integ proddensity exit=0
+[09:57:46] integ 50m exit=0
+[09:58:40] prod proddensity exit=0
+[10:00:08] prod 50m exit=0
+no mismatches
+bench-done

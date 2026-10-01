@@ -1,0 +1,4 @@
+[09:44:31] integ targets: 90 executables, 80 tests
+[09:44:37] integ configured
+[09:54:41] integ make exit=0
+      1 /work/integ/document/src/vespa/document/select/grammar/parser.yy: warning: 2 shift/reduce conflicts [-Wconflicts-sr]

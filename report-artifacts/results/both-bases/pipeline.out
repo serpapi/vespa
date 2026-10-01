@@ -1,0 +1,31 @@
+integ 39baddc7e0a07e8c2c456649f1bcb72241a46614 [searchlib] Strict source blending no longer slows down with
+  39baddc7 [searchlib] Strict source blending no longer slows down with each extra index s
+  fd3f64f6 Resolve string attribute labels once per executor
+  b135ebe1 Merge pull request #38038 from vespa-engine/hmusum/20260930-add-more-paths-to-l
+prod 801cfcd43141d713c0b7383310db28366d48c67c [searchlib] Strict source blending no longer slows down with
+  801cfcd4 [searchlib] Strict source blending no longer slows down with each extra index s
+  bd5257a2 Resolve string attribute labels once per executor
+  a1024266 Merge pull request #36550 from vespa-engine/arnej/add-commons-compress
+g++ (GCC) 15.2.1 20260123 (Red Hat 15.2.1-7)
+cmake version 3.30.9
+[09:44:12] bootstrapped-integ
+[09:44:30] bootstrapped-prod
+[09:44:31] integ targets: 90 executables, 80 tests
+[09:44:37] integ configured
+[09:54:41] integ make exit=0
+      1 /work/integ/document/src/vespa/document/select/grammar/parser.yy: warning: 2 shift/reduce conflicts [-Wconflicts-sr]
+[09:44:31] prod targets: 86 executables, 76 tests
+[09:44:37] prod configured
+[09:53:54] prod make exit=0
+      3 /work/prod/eval/src/vespa/eval/eval/aggr.h:173:20: warning: inlining failed in call to ‘constexpr void vespalib::eval::aggr::Median<T>::merge(const vespalib::eval::aggr::Median<T>&) [with T = double]’: --param inline-unit-growth limit reached [-Winline]
+      1 /work/prod/document/src/vespa/document/select/grammar/parser.yy: warning: 2 shift/reduce conflicts [-Wconflicts-sr]
+[09:54:41] build exits integ=0 prod=0
+Total Tests: 80
+[09:54:51] integ ctest exit=0
+100% tests passed, 0 tests failed out of 80
+Total Test time (real) =   9.32 sec
+Total Tests: 76
+[09:55:00] prod ctest exit=0
+100% tests passed, 0 tests failed out of 76
+Total Test time (real) =   9.38 sec
+[09:55:00] pipeline-done

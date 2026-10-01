@@ -1,0 +1,1 @@
+fuse /work/fusion/out-a io=direct sources=9 docid_limit=2100001 in_posting_bytes=7619833856 in_bytes=8696006379 out_posting_bytes=7538155520 out_bytes=8607647213 wall_s=125.71 cpu_s=55.31 in_MBps_wall=69.2 in_MBps_cpu=157.2 out_MBps_wall=68.5

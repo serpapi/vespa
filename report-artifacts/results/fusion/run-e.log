@@ -1,0 +1,3 @@
+fuse /work/fusion/out-e io=normal sources=9 docid_limit=2100001 in_posting_bytes=7619833856 in_bytes=8696006379 out_posting_bytes=7538155520 out_bytes=8607647213 wall_s=58.48 cpu_s=58.43 in_MBps_wall=148.7 in_MBps_cpu=148.8 out_MBps_wall=147.2
+[ perf record: Woken up 19 times to write data ]
+[ perf record: Captured and wrote 4.933 MB /work/fusion/perf-normal.data (38442 samples) ]

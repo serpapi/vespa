@@ -1,0 +1,533 @@
+ Percent |	Source code & Disassembly of libvespa_searchlib.so for cycles (16150 samples, percent: local period)
+--------------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         :            Disassembly of section .text:
+         :
+         :            0000000000402e10 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)>:
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            : Zc4PostingReaderBase(dynamic_k), _decodeContext(nullptr) {
+         :            }
+         :
+         :            template <bool bigEndian> Zc4PostingReader<bigEndian>::~Zc4PostingReader() = default;
+         :
+         :            template <bool bigEndian> void Zc4PostingReader<bigEndian>::read_doc_id_and_features(DocIdAndFeatures& features) {
+    0.00 :   402e10: push   %rbp
+    0.00 :   402e11: mov    %rsp,%rbp
+    0.01 :   402e14: push   %r14
+    0.00 :   402e16: push   %r12
+    0.00 :   402e18: mov    %rsi,%r12
+    0.00 :   402e1b: push   %rbx
+    1.08 :   402e1c: mov    %rdi,%rbx
+    0.00 :   402e1f: sub    $0x48,%rsp
+         :            if (_residue == 0) {
+    0.00 :   402e23: mov    0x2a8(%rdi),%edi
+    0.04 :   402e29: test   %edi,%edi
+    0.00 :   402e2b: jne    402ea5 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x95>
+         :            if (_has_more) {
+    0.00 :   402e2d: cmpb   $0x0,0xb0(%rbx)
+    0.00 :   402e34: jne    402e88 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x78>
+         :            std::vector<search::index::WordDocElementFeatures, std::allocator<search::index::WordDocElementFeatures> >::clear():
+         :            *  the user's responsibility.
+         :            */
+         :            _GLIBCXX20_CONSTEXPR
+         :            void
+         :            clear() _GLIBCXX_NOEXCEPT
+         :            { _M_erase_at_end(this->_M_impl._M_start); }
+    0.00 :   402e36: mov    0x10(%rsi),%rax
+         :            search::index::DocIdAndFeatures::clear(unsigned int):
+         :            _bit_length = 0u;
+         :            _blob.clear();
+         :            }
+         :
+         :            void clear(uint32_t doc_id) {
+         :            _doc_id = doc_id;
+    0.00 :   402e3a: movl   $0xffffffff,(%rsi)
+         :            std::vector<search::index::WordDocElementFeatures, std::allocator<search::index::WordDocElementFeatures> >::_M_erase_at_end(search::index::WordDocElementFeatures*):
+         :            // _M_assign_aux.
+         :            _GLIBCXX20_CONSTEXPR
+         :            void
+         :            _M_erase_at_end(pointer __pos) _GLIBCXX_NOEXCEPT
+         :            {
+         :            if (size_type __n = this->_M_impl._M_finish - __pos)
+    0.00 :   402e40: cmp    %rax,0x18(%rsi)
+    0.00 :   402e44: je     402e4a <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x3a>
+         :            {
+         :            std::_Destroy(__pos, this->_M_impl._M_finish,
+         :            _M_get_Tp_allocator());
+         :            this->_M_impl._M_finish = __pos;
+    0.00 :   402e46: mov    %rax,0x18(%rsi)
+         :            std::vector<search::index::WordDocElementWordPosFeatures, std::allocator<search::index::WordDocElementWordPosFeatures> >::clear():
+         :            { _M_erase_at_end(this->_M_impl._M_start); }
+    0.00 :   402e4a: mov    0x28(%r12),%rax
+         :            std::vector<search::index::WordDocElementWordPosFeatures, std::allocator<search::index::WordDocElementWordPosFeatures> >::_M_erase_at_end(search::index::WordDocElementWordPosFeatures*):
+         :            if (size_type __n = this->_M_impl._M_finish - __pos)
+    0.00 :   402e4f: cmp    %rax,0x30(%r12)
+    0.00 :   402e54: je     402e5b <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x4b>
+         :            this->_M_impl._M_finish = __pos;
+    0.00 :   402e56: mov    %rax,0x30(%r12)
+         :            std::vector<unsigned long, std::allocator<unsigned long> >::clear():
+         :            { _M_erase_at_end(this->_M_impl._M_start); }
+    0.00 :   402e5b: mov    0x40(%r12),%rax
+         :            search::index::DocIdAndFeatures::clear_features():
+         :            _bit_offset = 0u;
+    0.00 :   402e60: movq   $0x0,0x58(%r12)
+         :            std::vector<unsigned long, std::allocator<unsigned long> >::_M_erase_at_end(unsigned long*):
+         :            if (size_type __n = this->_M_impl._M_finish - __pos)
+    0.00 :   402e69: cmp    %rax,0x48(%r12)
+    0.00 :   402e6e: je     4030b8 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2a8>
+         :            this->_M_impl._M_finish = __pos;
+    0.00 :   402e74: mov    %rax,0x48(%r12)
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            abort();
+         :            }
+         :            }
+         :            }
+         :            --_residue;
+         :            }
+    0.00 :   402e79: lea    -0x18(%rbp),%rsp
+    0.00 :   402e7d: pop    %rbx
+    0.00 :   402e7e: pop    %r12
+    0.00 :   402e80: pop    %r14
+    0.00 :   402e82: pop    %rbp
+    0.00 :   402e83: ret
+    0.00 :   402e84: nopl   0x0(%rax)
+         :            search::diskindex::Zc4PostingReader<true>::read_word_start():
+         :
+         :            template <bool bigEndian> void Zc4PostingReader<bigEndian>::read_word_start() {
+         :            Zc4PostingReaderBase::read_word_start(*_decodeContext);
+    0.00 :   402e88: mov    0x2b0(%rbx),%rsi
+    0.00 :   402e8f: mov    %rbx,%rdi
+    0.00 :   402e92: call   14530 <search::diskindex::Zc4PostingReaderBase::read_word_start(search::bitcompression::DecodeContext64Base&)@plt>
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            assert(_residue != 0);
+    0.00 :   402e97: mov    0x2a8(%rbx),%esi
+    0.00 :   402e9d: test   %esi,%esi
+    0.00 :   402e9f: je     40318b <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x37b>
+         :            if (_last_doc_id > 0) {
+    0.00 :   402ea5: mov    0xc4(%rbx),%ecx
+         :            read_common_word_doc_id(*_decodeContext);
+    0.05 :   402eab: mov    0x2b0(%rbx),%rsi
+         :            if (_last_doc_id > 0) {
+    0.00 :   402eb2: test   %ecx,%ecx
+    1.14 :   402eb4: jne    4030c8 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2b8>
+         :            UC64_DECODECONTEXT_CONSTRUCTOR(o, d._);
+    0.00 :   402eba: mov    0x20(%rsi),%rdx
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, _doc_id_k, EC);
+    0.06 :   402ebe: mov    (%rbx),%r11d
+    0.00 :   402ec1: xor    %r10d,%r10d
+    0.00 :   402ec4: mov    $0x3f,%eax
+    0.00 :   402ec9: movzbl (%rbx),%r14d
+    0.00 :   402ecd: mov    $0x1,%r8d
+         :            UC64_DECODECONTEXT_CONSTRUCTOR(o, d._);
+    0.01 :   402ed3: mov    0x30(%rsi),%r9d
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, _doc_id_k, EC);
+    0.00 :   402ed7: lzcnt  %rdx,%r10
+    0.04 :   402edc: add    %r10d,%r11d
+    0.00 :   402edf: shlx   %r10,%rdx,%rdx
+         :            UC64_DECODECONTEXT_CONSTRUCTOR(o, d._);
+    0.00 :   402ee4: mov    0x8(%rsi),%rdi
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, _doc_id_k, EC);
+    0.00 :   402ee8: sub    %r11d,%eax
+    0.00 :   402eeb: shlx   %r14,%r8,%r8
+         :            UC64_DECODECONTEXT_CONSTRUCTOR(o, d._);
+    0.01 :   402ef0: mov    0x28(%rsi),%rcx
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, _doc_id_k, EC);
+    0.00 :   402ef4: shrx   %rax,%rdx,%rax
+    0.00 :   402ef9: sub    %r8,%rax
+    0.03 :   402efc: mov    %rax,%r14
+    0.00 :   402eff: lea    0x1(%r11),%eax
+    0.00 :   402f03: shlx   %rax,%rdx,%rax
+    0.00 :   402f08: lea    0x1(%r11,%r10,1),%edx
+    0.01 :   402f0d: cmp    %edx,%r9d
+    0.01 :   402f10: jb     4031b0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x3a0>
+    0.00 :   402f16: mov    0xdef77b(%rip),%r11        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.05 :   402f1d: sub    %edx,%r9d
+    0.10 :   402f20: shrx   %r9,%rcx,%r10
+    0.00 :   402f25: and    (%r11,%rdx,8),%r10
+    0.04 :   402f29: or     %r10,%rax
+         :            _no_skip.set_doc_id(_no_skip.get_doc_id() + 1 + val64);
+    0.00 :   402f2c: mov    0xf8(%rbx),%edx
+         :            if (_posting_params._encode_interleaved_features) {
+    0.01 :   402f32: cmpb   $0x0,0xc2(%rbx)
+         :            _no_skip.set_doc_id(_no_skip.get_doc_id() + 1 + val64);
+    0.00 :   402f39: lea    0x1(%rdx,%r14,1),%edx
+    0.01 :   402f3e: mov    %edx,0xf8(%rbx)
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.02 :   402f44: mov    0x10(%rsi),%rdx
+         :            if (_posting_params._encode_interleaved_features) {
+    0.00 :   402f48: je     403005 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x1f5>
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.03 :   402f4e: cmp    %rdx,%rdi
+    0.00 :   402f51: jae    403200 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x3f0>
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, K_VALUE_ZCPOSTING_FIELD_LENGTH, EC);
+    0.00 :   402f57: xor    %r11d,%r11d
+    0.00 :   402f5a: mov    $0x36,%r8d
+    0.00 :   402f60: lzcnt  %rax,%r11
+    0.06 :   402f65: sub    %r11d,%r8d
+    0.00 :   402f68: shlx   %r11,%rax,%rax
+    0.00 :   402f6d: shrx   %r8,%rax,%r10
+    0.01 :   402f72: lea    0xa(%r11),%r8d
+    0.01 :   402f76: shlx   %r8,%rax,%rax
+    0.01 :   402f7b: lea    0xa(%r11,%r11,1),%r8d
+    0.00 :   402f80: cmp    %r8d,%r9d
+    0.02 :   402f83: jb     4032d0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x4c0>
+    0.00 :   402f89: mov    0xdef708(%rip),%r14        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.05 :   402f90: sub    %r8d,%r9d
+    0.00 :   402f93: shrx   %r9,%rcx,%r11
+    0.02 :   402f98: and    (%r14,%r8,8),%r11
+    0.16 :   402f9c: or     %r11,%rax
+         :            _no_skip.set_field_length(val64 + 1);
+    0.00 :   402f9f: lea    -0x1ff(%r10),%r8d
+    0.00 :   402fa6: mov    %r8d,0x108(%rbx)
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.03 :   402fad: cmp    %rdx,%rdi
+    0.02 :   402fb0: jae    403248 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x438>
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, K_VALUE_ZCPOSTING_NUM_OCCS, EC);
+    0.00 :   402fb6: xor    %r11d,%r11d
+    0.00 :   402fb9: mov    $0x3f,%r8d
+    0.00 :   402fbf: lzcnt  %rax,%r11
+    0.10 :   402fc4: sub    %r11d,%r8d
+    0.00 :   402fc7: shlx   %r11,%rax,%rax
+    0.00 :   402fcc: shrx   %r8,%rax,%r10
+    0.01 :   402fd1: lea    0x1(%r11),%r8d
+    0.00 :   402fd5: shlx   %r8,%rax,%rax
+    0.01 :   402fda: lea    0x1(%r11,%r11,1),%r8d
+    0.00 :   402fdf: cmp    %r8d,%r9d
+    0.03 :   402fe2: jb     403290 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x480>
+    0.00 :   402fe8: mov    0xdef6a9(%rip),%r14        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.02 :   402fef: sub    %r8d,%r9d
+    0.00 :   402ff2: shrx   %r9,%rcx,%r11
+    0.02 :   402ff7: and    (%r14,%r8,8),%r11
+    0.20 :   402ffb: or     %r11,%rax
+         :            _no_skip.set_num_occs(val64 + 1);
+    0.00 :   402ffe: mov    %r10d,0x10c(%rbx)
+         :            UC64_DECODECONTEXT_STORE(o, d._);
+    0.00 :   403005: vmovq  %rax,%xmm1
+    0.07 :   40300a: mov    %rdi,0x8(%rsi)
+    0.00 :   40300e: vpinsrq $0x1,%rcx,%xmm1,%xmm0
+    0.18 :   403014: mov    %r9d,0x30(%rsi)
+    0.00 :   403018: vmovdqu %xmm0,0x20(%rsi)
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.01 :   40301d: cmp    %rdx,%rdi
+    0.00 :   403020: jae    4031f0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x3e0>
+         :            search::index::DocIdAndFeatures::set_doc_id(unsigned int):
+         :            }
+         :
+         :            uint32_t doc_id() const { return _doc_id; }
+         :            uint32_t field_length() const { return _field_length; }
+         :            uint32_t num_occs() const { return _num_occs; }
+         :            void set_doc_id(uint32_t val) { _doc_id = val; }
+    0.08 :   403026: mov    0xf8(%rbx),%eax
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            if (_posting_params._encode_features) {
+    0.13 :   40302c: cmpb   $0x0,0xc1(%rbx)
+         :            search::index::DocIdAndFeatures::set_doc_id(unsigned int):
+    0.04 :   403033: mov    %eax,(%r12)
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.03 :   403037: je     4030d8 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2c8>
+         :            if (_posting_params._encode_interleaved_features) {
+    0.05 :   40303d: cmpb   $0x0,0xc2(%rbx)
+    0.05 :   403044: je     403052 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x242>
+         :            search::diskindex::Zc4PostingReaderBase::NoSkip::get_field_length() const:
+         :            public:
+         :            NoSkip();
+         :            ~NoSkip();
+         :            void read(bool decode_interleaved_features);
+         :            void check_not_end(uint32_t last_doc_id);
+         :            uint32_t get_field_length() const { return _field_length; }
+    0.00 :   403046: mov    0x108(%rbx),%rax
+         :            search::index::DocIdAndFeatures::set_field_length(unsigned int):
+         :            void set_field_length(uint32_t val) { _field_length = val; }
+   91.99 :   40304d: mov    %rax,0x4(%r12)
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            _decodeContext->readFeatures(features);
+    0.00 :   403052: mov    0x2b0(%rbx),%rdi
+    0.00 :   403059: mov    %r12,%rsi
+    0.00 :   40305c: mov    (%rdi),%rax
+    0.00 :   40305f: call   *0x98(%rax)
+         :            if (_last_doc_id > 0) {
+    0.62 :   403065: mov    0xc4(%rbx),%edx
+         :            if ((_residue == 1) ? (features_rel_pos != _features_size) : (features_rel_pos >= _features_size)) {
+    0.16 :   40306b: mov    0x2a8(%rbx),%eax
+         :            if (_last_doc_id > 0) {
+    0.15 :   403071: test   %edx,%edx
+    0.07 :   403073: je     4030b0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2a0>
+         :            uint64_t features_rel_pos = _decodeContext->getReadOffset() - _features_start_pos;
+    0.00 :   403075: mov    0x2b0(%rbx),%rdx
+    0.08 :   40307c: mov    0x38(%rdx),%rcx
+         :            search::bitcompression::DecodeContext64Base::getReadOffset() const:
+         :            }
+         :            return (bufferEndFilePos << 3) - (static_cast<uint64_t>(intOffset) << 6) + bitOffset;
+         :            }
+         :
+         :            uint64_t getReadOffset() const {
+         :            return _fileReadBias + (reinterpret_cast<unsigned long>(_valI) << 3) - _preRead;
+    0.96 :   403080: mov    0x8(%rdx),%rsi
+    0.01 :   403084: mov    0x30(%rdx),%edx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.03 :   403087: sub    0x250(%rbx),%rcx
+    0.04 :   40308e: lea    (%rcx,%rsi,8),%r12
+    0.00 :   403092: sub    %rdx,%r12
+         :            if ((_residue == 1) ? (features_rel_pos != _features_size) : (features_rel_pos >= _features_size)) {
+    0.12 :   403095: mov    0x258(%rbx),%rdx
+    0.04 :   40309c: cmp    $0x1,%eax
+    0.00 :   40309f: je     4030e0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2d0>
+    0.00 :   4030a1: cmp    %rdx,%r12
+    0.26 :   4030a4: jae    4030e5 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2d5>
+    0.00 :   4030a6: cs nopw 0x0(%rax,%rax,1)
+         :            --_residue;
+    0.00 :   4030b0: dec    %eax
+    0.09 :   4030b2: mov    %eax,0x2a8(%rbx)
+         :            }
+    0.06 :   4030b8: lea    -0x18(%rbp),%rsp
+    0.00 :   4030bc: pop    %rbx
+    0.16 :   4030bd: pop    %r12
+    0.03 :   4030bf: pop    %r14
+    0.01 :   4030c1: pop    %rbp
+    0.31 :   4030c2: ret
+    0.00 :   4030c3: nopl   0x0(%rax,%rax,1)
+         :            read_common_word_doc_id(*_decodeContext);
+    0.00 :   4030c8: mov    %rbx,%rdi
+    0.02 :   4030cb: call   a560 <search::diskindex::Zc4PostingReaderBase::read_common_word_doc_id(search::bitcompression::DecodeContext64Base&)@plt>
+    0.20 :   4030d0: jmp    403026 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x216>
+    0.00 :   4030d5: nopl   (%rax)
+         :            --_residue;
+    0.00 :   4030d8: mov    0x2a8(%rbx),%eax
+    0.00 :   4030de: jmp    4030b0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2a0>
+         :            if ((_residue == 1) ? (features_rel_pos != _features_size) : (features_rel_pos >= _features_size)) {
+    0.00 :   4030e0: cmp    %rdx,%r12
+    0.01 :   4030e3: je     4030b0 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x2a0>
+         :            ns_log::Logger::wants(ns_log::Logger::LogLevel):
+         :            (static_cast<unsigned char>(a) | static_cast<unsigned int>(static_cast<unsigned char>(b) << 8u) | \
+         :            static_cast<unsigned int>(static_cast<unsigned char>(c) << 16u) |                                \
+         :            static_cast<unsigned int>(static_cast<unsigned char>(d) << 24u))
+         :
+         :            inline bool Logger::wants(LogLevel level) {
+         :            return _logLevels[level] == CHARS_TO_UINT(' ', ' ', 'O', 'N');
+    0.00 :   4030e5: mov    0xe11974(%rip),%rdx        # 1214a60 <ns_log_logger>
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            LOG(error,
+    0.00 :   4030ec: cmpl   $0x4e4f2020,0x4(%rdx)
+    0.00 :   4030f3: jne    403186 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x376>
+         :            search::diskindex::Zc4PostingReaderBase::NoSkipBase::get_features_pos() const:
+         :            uint64_t get_features_pos() const { return _features_pos; }
+    0.00 :   4030f9: mov    0x100(%rbx),%r8
+         :            search::diskindex::Zc4PostingReaderBase::NoSkipBase::get_doc_id() const:
+         :            uint32_t get_doc_id() const { return _doc_id; }
+    0.00 :   403100: mov    0xf8(%rbx),%ecx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.00 :   403106: lea    -0x40(%rbp),%rdi
+    0.00 :   40310a: lea    0x8(%rbx),%rsi
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data() const:
+         :            { _M_string_length = __length; }
+         :
+         :            _GLIBCXX20_CONSTEXPR
+         :            pointer
+         :            _M_data() const
+         :            { return _M_dataplus._M_p; }
+    0.00 :   40310e: mov    0x260(%rbx),%rdx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.00 :   403115: mov    %eax,-0x50(%rbp)
+         :            search::diskindex::Zc4PostingReaderBase::NoSkipBase::get_features_pos() const:
+         :            uint64_t get_features_pos() const { return _features_pos; }
+    0.00 :   403118: mov    %r8,-0x58(%rbp)
+         :            search::diskindex::Zc4PostingReaderBase::NoSkipBase::get_doc_id() const:
+         :            uint32_t get_doc_id() const { return _doc_id; }
+    0.00 :   40311c: mov    %ecx,-0x4c(%rbp)
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data() const:
+    0.00 :   40311f: mov    %rdx,-0x48(%rbp)
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.00 :   403123: call   11e60 <search::ComprFileReadContext::get_file_name[abi:cxx11]() const@plt>
+    0.00 :   403128: mov    $0x1,%esi
+    0.00 :   40312d: lea    0xe1192c(%rip),%rdi        # 1214a60 <ns_log_logger>
+    0.00 :   403134: push   %rax
+    0.00 :   403135: mov    -0x58(%rbp),%r8
+    0.00 :   403139: mov    -0x50(%rbp),%eax
+    0.00 :   40313c: mov    -0x4c(%rbp),%ecx
+    0.00 :   40313f: mov    -0x48(%rbp),%rdx
+    0.00 :   403143: push   %r8
+    0.00 :   403145: lea    0xb185a4(%rip),%r8        # f1b6f0 <typeinfo name for std::_Sp_counted_ptr_inplace<search::expression::ExpressionTree, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>+0x5e370>
+    0.00 :   40314c: push   %r12
+    0.00 :   40314e: push   %rax
+    0.00 :   40314f: xor    %eax,%eax
+    0.00 :   403151: push   %rcx
+    0.00 :   403152: mov    $0x55,%ecx
+    0.00 :   403157: push   %rdx
+    0.00 :   403158: lea    0xb18541(%rip),%rdx        # f1b6a0 <typeinfo name for std::_Sp_counted_ptr_inplace<search::expression::ExpressionTree, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>+0x5e320>
+    0.00 :   40315f: mov    -0x40(%rbp),%r9
+    0.00 :   403163: call   11220 <ns_log::Logger::doLog(ns_log::Logger::LogLevel, char const*, int, char const*, ...)@plt>
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data() const:
+    0.00 :   403168: mov    -0x40(%rbp),%rdi
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_is_local() const:
+         :
+         :            _GLIBCXX20_CONSTEXPR
+         :            bool
+         :            _M_is_local() const
+         :            {
+         :            if (_M_data() == _M_local_data())
+    0.00 :   40316c: lea    -0x30(%rbp),%rax
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.00 :   403170: add    $0x30,%rsp
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_is_local() const:
+    0.00 :   403174: cmp    %rax,%rdi
+    0.00 :   403177: je     403186 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x376>
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_destroy(unsigned long):
+         :            }
+         :
+         :            _GLIBCXX20_CONSTEXPR
+         :            void
+         :            _M_destroy(size_type __size) throw()
+         :            { _Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1); }
+    0.00 :   403179: mov    -0x30(%rbp),%rax
+    0.00 :   40317d: lea    0x1(%rax),%rsi
+         :            std::__new_allocator<char>::deallocate(char*, unsigned long):
+         :            _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n),
+         :            std::align_val_t(alignof(_Tp)));
+         :            return;
+         :            }
+         :            #endif
+         :            _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+    0.00 :   403181: call   10480 <operator delete(void*, unsigned long)@plt>
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+         :            abort();
+    0.00 :   403186: call   1c210 <abort@plt>
+         :            assert(_residue != 0);
+    0.00 :   40318b: lea    0xb185de(%rip),%rcx        # f1b770 <typeinfo name for std::_Sp_counted_ptr_inplace<search::expression::ExpressionTree, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>+0x5e3f0>
+    0.00 :   403192: mov    $0x21,%edx
+    0.00 :   403197: lea    0xb18502(%rip),%rsi        # f1b6a0 <typeinfo name for std::_Sp_counted_ptr_inplace<search::expression::ExpressionTree, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>+0x5e320>
+    0.00 :   40319e: lea    0xab550f(%rip),%rdi        # eb86b4 <_fini+0x692044>
+    0.00 :   4031a5: call   c40 <__assert_fail@plt>
+    0.00 :   4031aa: nopw   0x0(%rax,%rax,1)
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, _doc_id_k, EC);
+    0.00 :   4031b0: test   %r9d,%r9d
+    0.07 :   4031b3: je     4031cb <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x3bb>
+    0.00 :   4031b5: mov    0xdef4dc(%rip),%r10        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.03 :   4031bc: sub    %r9d,%edx
+    0.00 :   4031bf: and    (%r10,%r9,8),%rcx
+    0.04 :   4031c3: shlx   %rdx,%rcx,%rcx
+    0.00 :   4031c8: or     %rcx,%rax
+         :            search::bitcompression::EncodeContext64EBase<true>::bswap(unsigned long):
+         :            return __builtin_bswap64(val);
+    0.00 :   4031cb: movbe  (%rdi),%rcx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.06 :   4031d0: mov    $0x40,%r9d
+    0.00 :   4031d6: add    $0x8,%rdi
+    0.01 :   4031da: sub    %edx,%r9d
+    0.00 :   4031dd: shrx   %r9,%rcx,%rdx
+    0.00 :   4031e2: or     %rdx,%rax
+    0.01 :   4031e5: jmp    402f2c <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x11c>
+    0.00 :   4031ea: nopw   0x0(%rax,%rax,1)
+         :            _readContext.readComprBuffer();
+    0.00 :   4031f0: lea    0x8(%rbx),%rdi
+    0.00 :   4031f4: call   8c10 <search::ComprFileReadContext::readComprBuffer()@plt>
+    0.00 :   4031f9: jmp    403026 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x216>
+    0.00 :   4031fe: xchg   %ax,%ax
+         :            UC64_DECODECONTEXT_STORE(o, d._);
+    0.00 :   403200: mov    %rdi,0x8(%rsi)
+    0.00 :   403204: vmovq  %rax,%xmm2
+         :            _readContext.readComprBuffer();
+    0.00 :   403209: lea    0x8(%rbx),%rdi
+         :            UC64_DECODECONTEXT_STORE(o, d._);
+    0.00 :   40320d: mov    %r9d,0x30(%rsi)
+    0.00 :   403211: vpinsrq $0x1,%rcx,%xmm2,%xmm0
+    0.00 :   403217: vmovdqu %xmm0,0x20(%rsi)
+    0.00 :   40321c: mov    %rsi,-0x48(%rbp)
+         :            _readContext.readComprBuffer();
+    0.00 :   403220: call   8c10 <search::ComprFileReadContext::readComprBuffer()@plt>
+         :            UC64_DECODECONTEXT_LOAD(o, d._);
+    0.00 :   403225: mov    -0x48(%rbp),%rsi
+    0.00 :   403229: mov    0x8(%rsi),%rdi
+    0.00 :   40322d: mov    0x20(%rsi),%rax
+    0.00 :   403231: mov    0x28(%rsi),%rcx
+    0.00 :   403235: mov    0x30(%rsi),%r9d
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.00 :   403239: mov    0x10(%rsi),%rdx
+    0.00 :   40323d: jmp    402f57 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x147>
+    0.00 :   403242: nopw   0x0(%rax,%rax,1)
+         :            UC64_DECODECONTEXT_STORE(o, d._);
+    0.00 :   403248: mov    %rdi,0x8(%rsi)
+    0.00 :   40324c: vmovq  %rax,%xmm3
+         :            _readContext.readComprBuffer();
+    0.00 :   403251: lea    0x8(%rbx),%rdi
+         :            UC64_DECODECONTEXT_STORE(o, d._);
+    0.00 :   403255: mov    %r9d,0x30(%rsi)
+    0.00 :   403259: vpinsrq $0x1,%rcx,%xmm3,%xmm0
+    0.00 :   40325f: vmovdqu %xmm0,0x20(%rsi)
+    0.00 :   403264: mov    %rsi,-0x48(%rbp)
+         :            _readContext.readComprBuffer();
+    0.00 :   403268: call   8c10 <search::ComprFileReadContext::readComprBuffer()@plt>
+         :            UC64_DECODECONTEXT_LOAD(o, d._);
+    0.00 :   40326d: mov    -0x48(%rbp),%rsi
+    0.00 :   403271: mov    0x8(%rsi),%rdi
+    0.00 :   403275: mov    0x20(%rsi),%rax
+    0.00 :   403279: mov    0x28(%rsi),%rcx
+    0.00 :   40327d: mov    0x30(%rsi),%r9d
+         :            if (__builtin_expect(oCompr >= d._valE, false)) {
+    0.00 :   403281: mov    0x10(%rsi),%rdx
+    0.00 :   403285: jmp    402fb6 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x1a6>
+    0.00 :   40328a: nopw   0x0(%rax,%rax,1)
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, K_VALUE_ZCPOSTING_NUM_OCCS, EC);
+    0.00 :   403290: test   %r9d,%r9d
+    0.05 :   403293: je     4032ab <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x49b>
+    0.00 :   403295: mov    0xdef3fc(%rip),%r11        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.01 :   40329c: sub    %r9d,%r8d
+    0.00 :   40329f: and    (%r11,%r9,8),%rcx
+    0.01 :   4032a3: shlx   %r8,%rcx,%rcx
+    0.01 :   4032a8: or     %rcx,%rax
+         :            search::bitcompression::EncodeContext64EBase<true>::bswap(unsigned long):
+    0.00 :   4032ab: movbe  (%rdi),%rcx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.01 :   4032b0: mov    $0x40,%r9d
+    0.00 :   4032b6: add    $0x8,%rdi
+    0.00 :   4032ba: sub    %r8d,%r9d
+    0.00 :   4032bd: shrx   %r9,%rcx,%r8
+    0.00 :   4032c2: or     %r8,%rax
+    0.00 :   4032c5: jmp    402ffe <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x1ee>
+    0.00 :   4032ca: nopw   0x0(%rax,%rax,1)
+         :            UC64_DECODEEXPGOLOMB_SMALL_NS(o, K_VALUE_ZCPOSTING_FIELD_LENGTH, EC);
+    0.00 :   4032d0: test   %r9d,%r9d
+    0.09 :   4032d3: je     4032eb <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x4db>
+    0.00 :   4032d5: mov    0xdef3bc(%rip),%r11        # 11f2698 <search::bitcompression::CodingTables::_intMask64@@Base-0x13208>
+    0.03 :   4032dc: sub    %r9d,%r8d
+    0.00 :   4032df: and    (%r11,%r9,8),%rcx
+    0.01 :   4032e3: shlx   %r8,%rcx,%rcx
+    0.01 :   4032e8: or     %rcx,%rax
+         :            search::bitcompression::EncodeContext64EBase<true>::bswap(unsigned long):
+    0.00 :   4032eb: movbe  (%rdi),%rcx
+         :            search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&):
+    0.03 :   4032f0: mov    $0x40,%r9d
+    0.00 :   4032f6: add    $0x8,%rdi
+    0.00 :   4032fa: sub    %r8d,%r9d
+    0.00 :   4032fd: shrx   %r9,%rcx,%r8
+    0.00 :   403302: or     %r8,%rax
+    0.00 :   403305: jmp    402f9f <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x18f>
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data() const:
+         :            { return _M_dataplus._M_p; }
+    0.00 :   40330a: mov    %rax,%rbx
+    0.00 :   40330d: mov    -0x40(%rbp),%rdi
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_is_local() const:
+         :            if (_M_data() == _M_local_data())
+    0.00 :   403311: lea    -0x30(%rbp),%rax
+    0.00 :   403315: cmp    %rax,%rdi
+    0.00 :   403318: jne    403325 <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x515>
+    0.00 :   40331a: vzeroupper
+         :            std::allocator<char>::~allocator():
+         :
+         :            __attribute__((__always_inline__))
+         :            #if __cpp_constexpr_dynamic_alloc
+         :            constexpr
+         :            #endif
+         :            ~allocator() _GLIBCXX_NOTHROW { }
+    0.00 :   40331d: mov    %rbx,%rdi
+    0.00 :   403320: call   13690 <_Unwind_Resume@plt>
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_destroy(unsigned long):
+         :            { _Alloc_traits::deallocate(_M_get_allocator(), _M_data(), __size + 1); }
+    0.00 :   403325: mov    -0x30(%rbp),%rax
+    0.00 :   403329: lea    0x1(%rax),%rsi
+         :            std::__new_allocator<char>::deallocate(char*, unsigned long):
+    0.00 :   40332d: vzeroupper
+    0.00 :   403330: call   10480 <operator delete(void*, unsigned long)@plt>
+         :            std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_destroy(unsigned long):
+    0.00 :   403335: jmp    40331d <search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features(search::index::DocIdAndFeatures&)+0x50d>

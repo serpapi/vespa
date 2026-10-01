@@ -1,0 +1,51 @@
+8177
+      Start 527: searchlib_simple_phrase_test_app
+      Start 528: searchlib_sourceblender_test_app
+ 1/38 Test #506: searchlib_leaf_blueprints_test_app ...............   Passed    0.03 sec
+      Start 529: searchlib_termwise_eval_test_app
+ 2/38 Test #505: searchlib_blueprint_test_app .....................   Passed    0.04 sec
+ 3/38 Test #509: searchlib_equiv_test_app .........................   Passed    0.04 sec
+      Start 530: searchlib_weak_and_test_app
+      Start 532: searchlib_weak_and_heap_test_app
+ 4/38 Test #288: searchcore_indexcollection_test_app ..............   Passed    0.04 sec
+ 5/38 Test #510: searchlib_exact_nearest_neighbor_test_app ........   Passed    0.04 sec
+      Start 533: searchlib_weak_and_scorers_test_app
+      Start 534: searchlib_weighted_set_term_test_app
+ 6/38 Test #511: searchlib_fake_index_test_app ....................   Passed    0.04 sec
+ 7/38 Test #515: searchlib_getnodeweight_test_app .................   Passed    0.04 sec
+ 8/38 Test #516: searchlib_queryeval_global_filter_test_app .......   Passed    0.04 sec
+ 9/38 Test #524: searchlib_predicate_search_test_app ..............   Passed    0.03 sec
+10/38 Test #525: searchlib_queryeval_profiled_iterator_test_app ...   Passed    0.03 sec
+      Start 535: searchlib_wrappers_test_app
+11/38 Test #296: searchcore_query_test_app ........................   Passed    0.04 sec
+12/38 Test #299: searchcore_querynodes_test_app ...................   Passed    0.04 sec
+13/38 Test #526: searchlib_same_element_test_app ..................   Passed    0.03 sec
+14/38 Test #527: searchlib_simple_phrase_test_app .................   Passed    0.03 sec
+15/38 Test #512: searchlib_fake_searchable_test_app ...............   Passed    0.04 sec
+16/38 Test #503: searchlib_queryeval_test_app .....................   Passed    0.04 sec
+17/38 Test #523: searchlib_predicate_blueprint_test_app ...........   Passed    0.03 sec
+18/38 Test #513: searchlib_filter_search_test_app .................   Passed    0.04 sec
+19/38 Test #521: searchlib_or_speed_test_app ......................   Passed    0.04 sec
+20/38 Test #518: searchlib_matching_elements_search_test_app ......   Passed    0.04 sec
+21/38 Test #517: searchlib_queryeval_lazy_filter_test_app .........   Passed    0.04 sec
+22/38 Test #507: searchlib_intermediate_blueprints_test_app .......   Passed    0.05 sec
+23/38 Test #508: searchlib_dot_product_test_app ...................   Passed    0.05 sec
+24/38 Test #519: searchlib_monitoring_search_iterator_test_app ....   Passed    0.05 sec
+25/38 Test #522: searchlib_parallel_weak_and_test_app .............   Passed    0.05 sec
+26/38 Test #532: searchlib_weak_and_heap_test_app .................   Passed    0.03 sec
+27/38 Test #533: searchlib_weak_and_scorers_test_app ..............   Passed    0.03 sec
+28/38 Test #529: searchlib_termwise_eval_test_app .................   Passed    0.04 sec
+29/38 Test #528: searchlib_sourceblender_test_app .................   Passed    0.07 sec
+30/38 Test #530: searchlib_weak_and_test_app ......................   Passed    0.04 sec
+31/38 Test #535: searchlib_wrappers_test_app ......................   Passed    0.04 sec
+32/38 Test #534: searchlib_weighted_set_term_test_app .............   Passed    0.05 sec
+33/38 Test #520: searchlib_multibitvectoriterator_test_app ........   Passed    0.08 sec
+34/38 Test #292: searchcore_matching_test_app .....................   Passed    0.12 sec
+35/38 Test #286: searchcore_fusionrunner_test_app .................   Passed    0.15 sec
+36/38 Test #514: searchlib_queryeval_flow_test_app ................   Passed    0.21 sec
+37/38 Test #504: searchlib_array_bool_test_app ....................   Passed    2.76 sec
+38/38 Test #285: searchcore_indexmanager_test_app .................   Passed    3.13 sec
+
+100% tests passed, 0 tests failed out of 38
+
+Total Test time (real) =   3.15 sec

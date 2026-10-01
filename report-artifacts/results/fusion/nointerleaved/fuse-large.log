@@ -1,0 +1,1 @@
+fuse /work/fusion-nointerleaved/large io=direct sources=32 docid_limit=2080001 in_posting_bytes=5364453376 in_bytes=6304512368 out_posting_bytes=5324148736 out_bytes=6384121070 wall_s=108.54 cpu_s=55.66 in_MBps_wall=58.1 in_MBps_cpu=113.3 out_MBps_wall=58.8

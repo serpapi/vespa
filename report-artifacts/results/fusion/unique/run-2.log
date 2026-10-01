@@ -1,0 +1,1 @@
+fuse /work/fusion-unique/out io=normal sources=9 docid_limit=2100001 in_posting_bytes=5829414912 in_bytes=6905259755 out_posting_bytes=5767839744 out_bytes=6837069293 wall_s=48.31 cpu_s=48.16 in_MBps_wall=142.9 in_MBps_cpu=143.4 out_MBps_wall=141.5

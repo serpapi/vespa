@@ -1,0 +1,5 @@
+[09:44:31] prod targets: 86 executables, 76 tests
+[09:44:37] prod configured
+[09:53:54] prod make exit=0
+      3 /work/prod/eval/src/vespa/eval/eval/aggr.h:173:20: warning: inlining failed in call to ‘constexpr void vespalib::eval::aggr::Median<T>::merge(const vespalib::eval::aggr::Median<T>&) [with T = double]’: --param inline-unit-growth limit reached [-Winline]
+      1 /work/prod/document/src/vespa/document/select/grammar/parser.yy: warning: 2 shift/reduce conflicts [-Wconflicts-sr]

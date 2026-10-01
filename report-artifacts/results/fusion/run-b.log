@@ -1,0 +1,3 @@
+fuse /work/fusion/out-b io=direct sources=9 docid_limit=2100001 in_posting_bytes=7619833856 in_bytes=8696006379 out_posting_bytes=7538155520 out_bytes=8607647213 wall_s=126.19 cpu_s=56.02 in_MBps_wall=68.9 in_MBps_cpu=155.2 out_MBps_wall=68.2
+[ perf record: Woken up 24 times to write data ]
+[ perf record: Captured and wrote 6.167 MB /work/fusion/perf-direct.data (48468 samples) ]

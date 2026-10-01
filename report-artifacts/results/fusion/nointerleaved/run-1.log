@@ -1,0 +1,1 @@
+fuse /work/fusion-nointerleaved/out io=normal sources=9 docid_limit=2100001 in_posting_bytes=5432930304 in_bytes=6508226292 out_posting_bytes=5367992320 out_bytes=6436722158 wall_s=63.79 cpu_s=48.36 in_MBps_wall=102.0 in_MBps_cpu=134.6 out_MBps_wall=100.9

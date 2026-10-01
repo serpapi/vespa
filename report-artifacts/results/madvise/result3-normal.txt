@@ -1,0 +1,33 @@
+round  0 hot_resident_before=  0.0% hot_major_faults=2049 active_file=0M inactive_file=512M workingset_activate_file=0
+round  1 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=768M workingset_activate_file=0
+round  2 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=1024M workingset_activate_file=0
+round  3 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=1280M workingset_activate_file=0
+round  4 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=1536M workingset_activate_file=0
+round  5 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=1792M workingset_activate_file=0
+round  6 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2038M workingset_activate_file=0
+round  7 hot_resident_before= 96.3% hot_major_faults=2049 active_file=0M inactive_file=2037M workingset_activate_file=0
+round  8 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2036M workingset_activate_file=0
+round  9 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2035M workingset_activate_file=0
+round 10 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2034M workingset_activate_file=0
+round 11 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2033M workingset_activate_file=0
+round 12 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2032M workingset_activate_file=0
+round 13 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2031M workingset_activate_file=0
+round 14 hot_resident_before= 93.5% hot_major_faults=2049 active_file=0M inactive_file=2030M workingset_activate_file=0
+round 15 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2029M workingset_activate_file=0
+round 16 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2028M workingset_activate_file=0
+round 17 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2027M workingset_activate_file=0
+round 18 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2025M workingset_activate_file=0
+round 19 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2024M workingset_activate_file=0
+round 20 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2023M workingset_activate_file=0
+round 21 hot_resident_before= 90.5% hot_major_faults=2049 active_file=0M inactive_file=2022M workingset_activate_file=0
+round 22 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2021M workingset_activate_file=0
+round 23 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2020M workingset_activate_file=0
+round 24 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2019M workingset_activate_file=0
+round 25 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2018M workingset_activate_file=0
+round 26 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2017M workingset_activate_file=0
+round 27 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2016M workingset_activate_file=0
+round 28 hot_resident_before= 87.5% hot_major_faults=2049 active_file=0M inactive_file=2015M workingset_activate_file=0
+round 29 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2014M workingset_activate_file=0
+round 30 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2012M workingset_activate_file=0
+round 31 hot_resident_before=100.0% hot_major_faults=0 active_file=0M inactive_file=2012M workingset_activate_file=0
+advice=normal rounds=28 avg_hot_resident_before_touch=98.9% avg_hot_major_faults_per_round=293 (hot set 65536 pages) sum=533123725

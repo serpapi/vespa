@@ -1,0 +1,3 @@
+# docs=460000000 large_postings=5902078 small_postings=5000 reps=5 seed=1
+CSV,children,k,stale,unpack,impl,hits,reps,min_ns_per_hit,median_ns_per_hit
+CSV,zc,1,0.02,0,current,5789196,5,8.475,8.542

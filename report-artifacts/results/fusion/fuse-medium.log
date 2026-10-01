@@ -1,0 +1,1 @@
+fuse /work/fusion/medium io=direct sources=8 docid_limit=520001 in_posting_bytes=1856741376 in_bytes=2183225886 out_posting_bytes=1860800512 out_bytes=2145483243 wall_s=32.77 cpu_s=14.83 in_MBps_wall=66.6 in_MBps_cpu=147.3 out_MBps_wall=65.5

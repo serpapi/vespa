@@ -1,0 +1,16 @@
+# started on Thu Oct  1 08:44:04 2026
+
+
+ Performance counter stats for '/work/vespa/build/searchlib/src/tests/diskindex/fusion/searchlib_fusion_profile_app fuse /work/fusion-unique/out 4 /work/fusion-unique/large /work/fusion-unique/small0 /work/fusion-unique/small1 /work/fusion-unique/small2 /work/fusion-unique/small3 /work/fusion-unique/small4 /work/fusion-unique/small5 /work/fusion-unique/small6 /work/fusion-unique/small7':
+
+      217240642248      cycles                                                      
+      668030545006      instructions              #    3.08  insn per cycle         
+        2161088462      stli_other                                                  
+        1091428289      branch-misses                                               
+
+      48.709006164 seconds time elapsed
+
+      46.595923000 seconds user
+       1.961084000 seconds sys
+
+

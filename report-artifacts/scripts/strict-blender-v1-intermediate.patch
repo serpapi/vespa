@@ -1,0 +1,210 @@
+diff --git a/searchlib/src/vespa/searchlib/queryeval/sourceblendersearch.cpp b/searchlib/src/vespa/searchlib/queryeval/sourceblendersearch.cpp
+index b63f3f6f906..8830c89c4e0 100644
+--- a/searchlib/src/vespa/searchlib/queryeval/sourceblendersearch.cpp
++++ b/searchlib/src/vespa/searchlib/queryeval/sourceblendersearch.cpp
+@@ -7,7 +7,10 @@
+ #include <vespa/vespalib/stllike/asciistream.h>
+ 
+ #include <vespa/vespalib/objects/visit.hpp>
+-#include <vespa/vespalib/util/array.hpp>
++
++#include <algorithm>
++#include <array>
++#include <limits>
+ 
+ namespace search::queryeval {
+ 
+@@ -22,14 +25,40 @@ public:
+ 
+ SourceBlenderSearchNonStrict::~SourceBlenderSearchNonStrict() = default;
+ 
++/**
++ * The current docid of each child is mirrored in a contiguous array,
++ * updated only when the blender moves that child. The child at the
++ * smallest docid is tracked together with the smallest docid of all
++ * the other children. While the leading child stays below that bound
++ * (typically one large source with a few small ones), producing the
++ * next hit costs one child seek and one source selector lookup,
++ * independent of the number of children.
++ **/
+ class SourceBlenderSearchStrict : public SourceBlenderSearch {
+ public:
+     SourceBlenderSearchStrict(std::unique_ptr<Iterator> sourceSelector, const Children& children);
+     ~SourceBlenderSearchStrict() override;
++    void initRange(uint32_t begin_id, uint32_t end_id) override;
++    void transform_children(std::function<SearchIterator::UP(SearchIterator::UP)> f) override;
+ 
+ private:
+-    VESPA_DLL_LOCAL void advance() __attribute__((noinline));
+-    vespalib::Array<SearchIterator*> _nextChildren;
++    // Docid of the slot used for sources without a child. Candidates are
++    // always below the source selector docid limit, so it never matches.
++    static constexpr uint32_t no_child_docid = std::numeric_limits<uint32_t>::max();
++
++    std::vector<uint32_t>     _child_docid; // per child (in _children order) + no-child slot
++    std::array<uint16_t, 256> _source_to_child;
++    uint32_t                  _min_idx;    // child at the smallest docid
++    uint32_t                  _others_min; // smallest docid of all other children
++
++    void sync_child_docids();
++    void update_min() noexcept;
++    void seek_child(uint32_t idx, uint32_t docid) {
++        SearchIterator* child = getSearch(_children[idx]);
++        child->seek(docid);
++        _child_docid[idx] = child->getDocId();
++    }
++    void advance(uint32_t docid);
+ 
+     void doSeek(uint32_t docid) override;
+     Trinary is_strict() const override { return Trinary::True; }
+@@ -37,12 +66,52 @@ private:
+ 
+ SourceBlenderSearchStrict::SourceBlenderSearchStrict(std::unique_ptr<Iterator> sourceSelector,
+                                                      const Children&           children)
+-    : SourceBlenderSearch(std::move(sourceSelector), children), _nextChildren() {
+-    _nextChildren.reserve(children.size());
++    : SourceBlenderSearch(std::move(sourceSelector), children),
++      _child_docid(_children.size() + 1, no_child_docid),
++      _source_to_child(),
++      _min_idx(0),
++      _others_min(no_child_docid) {
++    _source_to_child.fill(static_cast<uint16_t>(_children.size()));
++    for (uint32_t i = 0; i < _children.size(); ++i) {
++        _source_to_child[_children[i]] = static_cast<uint16_t>(i);
++    }
++    sync_child_docids();
+ }
+ 
+ SourceBlenderSearchStrict::~SourceBlenderSearchStrict() = default;
+ 
++void SourceBlenderSearchStrict::initRange(uint32_t begin_id, uint32_t end_id) {
++    SourceBlenderSearch::initRange(begin_id, end_id);
++    sync_child_docids();
++}
++
++void SourceBlenderSearchStrict::transform_children(std::function<SearchIterator::UP(SearchIterator::UP)> f) {
++    SourceBlenderSearch::transform_children(std::move(f));
++    sync_child_docids();
++}
++
++void SourceBlenderSearchStrict::sync_child_docids() {
++    for (uint32_t i = 0; i < _children.size(); ++i) {
++        _child_docid[i] = getSearch(_children[i])->getDocId();
++    }
++    update_min();
++}
++
++void SourceBlenderSearchStrict::update_min() noexcept {
++    uint32_t min_idx = 0;
++    uint32_t min_docid = no_child_docid;
++    uint32_t others_min = no_child_docid;
++    for (uint32_t i = 0; i < _children.size(); ++i) {
++        uint32_t docid = _child_docid[i];
++        bool     less = (docid < min_docid);
++        others_min = less ? min_docid : std::min(others_min, docid);
++        min_idx = less ? i : min_idx;
++        min_docid = less ? docid : min_docid;
++    }
++    _min_idx = min_idx;
++    _others_min = others_min;
++}
++
+ void SourceBlenderSearch::doSeek(uint32_t docid) {
+     if (docid >= _docIdLimit) {
+         setDocId(endDocId);
+@@ -56,53 +125,63 @@ void SourceBlenderSearch::doSeek(uint32_t docid) {
+ 
+ void SourceBlenderSearchStrict::doSeek(uint32_t docid) {
+     if (docid >= _docIdLimit) {
+-        setDocId(endDocId);
++        setAtEnd();
+         return;
+     }
+-    _matchedChild = getSearch(_sourceSelector->getSource(docid));
+-    if (_matchedChild->seek(docid)) {
+-        setDocId(docid);
++    if (docid <= _others_min) {
++        if (_child_docid[_min_idx] < docid) {
++            seek_child(_min_idx, docid);
++            if (_child_docid[_min_idx] > _others_min) {
++                update_min();
++            }
++        }
+     } else {
+-        for (auto& child : _children) {
+-            getSearch(child)->seek(docid);
++        for (uint32_t i = 0; i < _children.size(); ++i) {
++            if (_child_docid[i] < docid) {
++                seek_child(i, docid);
++            }
+         }
+-        advance();
++        update_min();
+     }
++    advance(docid);
+ }
+ 
+-void SourceBlenderSearchStrict::advance() {
++void SourceBlenderSearchStrict::advance(uint32_t docid) {
++    const uint32_t limit = std::min(_docIdLimit, getEndId());
+     for (;;) {
+-        SearchIterator* search = getSearch(_children[0]);
+-        uint32_t        minNextId = search->getDocId();
+-        _nextChildren.clear();
+-        _nextChildren.push_back_fast(search);
+-        for (uint32_t i = 1; i < _children.size(); ++i) {
+-            search = getSearch(_children[i]);
+-            uint32_t nextId = search->getDocId();
+-            if (nextId < minNextId) {
+-                minNextId = nextId;
+-                _nextChildren.clear();
+-                _nextChildren.push_back_fast(search);
+-            } else if (nextId == minNextId) {
+-                _nextChildren.push_back_fast(search);
++        const uint32_t candidate = _child_docid[_min_idx];
++        if (__builtin_expect(candidate >= limit, false)) {
++            // seeking exactly to a hit beyond the end id still reports it, like the non-strict blender does
++            if (candidate == docid) {
++                uint32_t owner = _source_to_child[_sourceSelector->getSource(candidate)];
++                if (_child_docid[owner] == candidate) {
++                    _matchedChild = getSearch(_children[owner]);
++                    setDocId(candidate);
++                    return;
++                }
+             }
+-        }
+-        if (isAtEnd(minNextId)) {
+             setAtEnd();
+             return;
+         }
+-        if (minNextId >= _docIdLimit) {
+-            setAtEnd();
++        uint32_t owner = _source_to_child[_sourceSelector->getSource(candidate)];
++        if (_child_docid[owner] == candidate) {
++            _matchedChild = getSearch(_children[owner]);
++            setDocId(candidate);
+             return;
+         }
+-        search = getSearch(_sourceSelector->getSource(minNextId));
+-        for (SearchIterator* child : _nextChildren) {
+-            if (child == search) {
+-                _matchedChild = search;
+-                setDocId(minNextId);
+-                return;
++        // candidate is not a hit (newer source owns it), move every child positioned at it
++        if (candidate < _others_min) {
++            seek_child(_min_idx, candidate + 1);
++            if (_child_docid[_min_idx] > _others_min) {
++                update_min();
++            }
++        } else {
++            for (uint32_t i = 0; i < _children.size(); ++i) {
++                if (_child_docid[i] == candidate) {
++                    seek_child(i, candidate + 1);
++                }
+             }
+-            child->seek(minNextId + 1);
++            update_min();
+         }
+     }
+ }

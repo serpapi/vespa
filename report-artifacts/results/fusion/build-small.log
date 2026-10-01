@@ -1,0 +1,8 @@
+build /work/fusion/small2 docs=5000 text_bytes=30799083 tokens=4820918 words=204218 posting_bytes=17362944 index_bytes=19081289 seconds=1.0
+build /work/fusion/small3 docs=5000 text_bytes=33307371 tokens=5130164 words=218547 posting_bytes=17768448 index_bytes=19634255 seconds=1.0
+build /work/fusion/small6 docs=5000 text_bytes=30743487 tokens=4820935 words=206869 posting_bytes=17362944 index_bytes=19105850 seconds=1.0
+build /work/fusion/small0 docs=5000 text_bytes=32025308 tokens=5044464 words=228592 posting_bytes=18116608 index_bytes=20056130 seconds=1.0
+build /work/fusion/small5 docs=5000 text_bytes=32759700 tokens=5144672 words=221994 posting_bytes=17997824 index_bytes=19875901 seconds=1.0
+build /work/fusion/small4 docs=5000 text_bytes=32358772 tokens=4961499 words=234246 posting_bytes=17797120 index_bytes=19892274 seconds=1.1
+build /work/fusion/small7 docs=5000 text_bytes=34585634 tokens=5376480 words=239443 posting_bytes=18530304 index_bytes=20592659 seconds=1.1
+build /work/fusion/small1 docs=5000 text_bytes=38236864 tokens=5771647 words=255686 posting_bytes=19714048 index_bytes=21850216 seconds=1.2

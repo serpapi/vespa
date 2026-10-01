@@ -1,0 +1,1 @@
+fuse /work/fusion-unique/large io=direct sources=32 docid_limit=2080001 in_posting_bytes=5675933696 in_bytes=6617491792 out_posting_bytes=5717692416 out_bytes=6778160365 wall_s=111.83 cpu_s=55.68 in_MBps_wall=59.2 in_MBps_cpu=118.8 out_MBps_wall=60.6

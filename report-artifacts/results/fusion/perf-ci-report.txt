@@ -1,0 +1,48 @@
+# Samples: 263K of event 'cycles'
+# Event count (approx.): 263592790776
+    33.97%  [.] search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features                                                                   
+     9.42%  [.] search::bitcompression::EncodeContext64EBase<true>::writeBits                                                                         
+     8.32%  [.] search::diskindex::Zc4PostingWriterBase::calc_skip_info                                                                               
+     8.07%  [.] search::bitcompression::EG2PosOccDecodeContext<true>::readFeatures                                                                    
+     6.18%  [.] search::bitcompression::FeatureEncodeContext<true>::writeBits                                                                         
+     3.22%  [.] search::diskindex::Zc4PostingReaderBase::NoSkip::read                                                                                 
+     2.92%  [.] search::diskindex::Zc4PostingWriter<true>::write_docid_and_features                                                                   
+     2.86%  [.] search::diskindex::FieldReader::read                                                                                                  
+     2.83%  [.] search::PostingPriorityQueue<search::diskindex::FieldReader>::adjust                                                                  
+     2.11%  [.] search::bitcompression::FeatureEncodeContext<true>::writeBytes                                                                        
+     2.07%  [.] search::PostingPriorityQueueMerger<search::diskindex::FieldReader, search::diskindex::FieldWriter>::mergeHeap                         
+     1.74%  [.] search::diskindex::Zc4PostingReaderBase::read_common_word_doc_id                                                                      
+     1.65%  [.] __memmove_avx512_unaligned_erms                                                                                                       
+     1.53%  [.] Fast_BufferedFile::Write2                                                                                                             
+     1.22%  [.] search::diskindex::Zc4PostingReaderBase::NoSkip::check_not_end                                                                        
+     1.09%  [.] search::bitcompression::PageDict4Reader::setupPage                                                                                    
+     0.90%  [k] copy_user_enhanced_fast_string                                                                                                        
+     0.76%  [.] search::bitcompression::EG2PosOccEncodeContext<true>::writeFeatures                                                                   
+     0.69%  [.] search::diskindex::Zc4PostingSeqWrite::writeDocIdAndFeatures                                                                          
+     0.64%  [.] search::diskindex::Zc4PostingSeqRead::readDocIdAndFeatures                                                                            
+     0.58%  [.] search::FlushToken::stop_requested                                                                                                    
+     0.55%  [.] search::bitcompression::PageDict4Reader::decodePWord                                                                                  
+     0.50%  [k] filemap_dirty_folio                                                                                                                   
+# Samples: 708K of event 'instructions'
+# Event count (approx.): 708878126628
+    39.45%  [.] search::diskindex::Zc4PostingReader<true>::read_doc_id_and_features                                                                   
+     9.62%  [.] search::bitcompression::EncodeContext64EBase<true>::writeBits                                                                         
+     8.65%  [.] search::diskindex::Zc4PostingWriterBase::calc_skip_info                                                                               
+     6.45%  [.] search::bitcompression::EG2PosOccDecodeContext<true>::readFeatures                                                                    
+     5.87%  [.] search::bitcompression::FeatureEncodeContext<true>::writeBits                                                                         
+     2.88%  [.] search::diskindex::FieldReader::read                                                                                                  
+     2.73%  [.] search::diskindex::Zc4PostingReaderBase::NoSkip::read                                                                                 
+     2.60%  [.] search::PostingPriorityQueue<search::diskindex::FieldReader>::adjust                                                                  
+     2.41%  [.] search::diskindex::Zc4PostingWriter<true>::write_docid_and_features                                                                   
+     2.31%  [.] search::bitcompression::FeatureEncodeContext<true>::writeBytes                                                                        
+     1.85%  [.] search::PostingPriorityQueueMerger<search::diskindex::FieldReader, search::diskindex::FieldWriter>::mergeHeap                         
+     1.72%  [.] __memmove_avx512_unaligned_erms                                                                                                       
+     1.51%  [.] search::diskindex::Zc4PostingReaderBase::read_common_word_doc_id                                                                      
+     1.50%  [.] Fast_BufferedFile::Write2                                                                                                             
+     1.09%  [.] search::diskindex::Zc4PostingReaderBase::NoSkip::check_not_end                                                                        
+     0.91%  [.] search::bitcompression::PageDict4Reader::setupPage                                                                                    
+     0.72%  [.] search::bitcompression::EG2PosOccEncodeContext<true>::writeFeatures                                                                   
+     0.66%  [.] search::diskindex::Zc4PostingSeqWrite::writeDocIdAndFeatures                                                                          
+     0.58%  [.] search::diskindex::Zc4PostingSeqRead::readDocIdAndFeatures                                                                            
+     0.57%  [.] search::bitcompression::PageDict4Reader::decodePWord                                                                                  
+     0.54%  [.] search::FlushToken::stop_requested                                                                                                    

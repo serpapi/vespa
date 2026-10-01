@@ -1,0 +1,10 @@
+# docs=50000000 large_postings=5000529 small_postings=5000 reps=3 seed=1
+CSV,children,k,stale,unpack,impl,hits,reps,min_ns_per_hit,median_ns_per_hit
+CSV,zc,1,0.02,0,legacy,4905654,3,9.674,9.685
+CSV,zc,1,0.02,0,current,4905654,3,7.038,7.051
+CSV,zc,1,0.02,1,legacy,4905654,3,35.284,35.377
+CSV,zc,1,0.02,1,current,4905654,3,29.692,29.831
+CSV,zc,10,0.02,0,legacy,4950874,3,14.282,14.534
+CSV,zc,10,0.02,0,current,4950874,3,7.191,7.199
+CSV,zc,10,0.02,1,legacy,4950874,3,40.559,40.758
+CSV,zc,10,0.02,1,current,4950874,3,30.774,30.786
