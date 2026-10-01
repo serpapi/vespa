@@ -1,6 +1,9 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "prod_features_test.h"
+#include <vespa/eval/eval/simple_value.h>
+#include <vespa/eval/eval/tensor_spec.h>
+#include <vespa/eval/eval/value_codec.h>
 #include <vespa/searchcommon/attribute/config.h>
 #include <vespa/searchlib/attribute/attributefactory.h>
 #include <vespa/searchlib/attribute/attributeguard.h>
@@ -45,6 +48,7 @@
 #include <vespa/searchlib/fef/test/plugin/setup.h>
 #include <vespa/searchlib/test/attribute_builder.h>
 #include <vespa/vespalib/geo/zcurve.h>
+#include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/util/rand48.h>
 #include <vespa/vespalib/util/string_hash.h>
 #include <vespa/vespalib/util/stringfmt.h>
@@ -1300,6 +1304,32 @@ TEST_F(ProdFeaturesTest, test_dot_product)
             EXPECT_EQ(out.getVector()[1].first, 30);
             EXPECT_EQ(out.getVector()[1].second, -3.5);
         }
+        { // keys containing ':', the weight follows the last ':'
+            dotproduct::wset::StringVector out;
+            WeightedSetParser::parse("{coffee:fr:2.5,  tea:de:-3,a:b:c:0.25,:x:4,::5}", out);
+            ASSERT_EQ(out.getVector().size(), 5u);
+            EXPECT_EQ(out.getVector()[0].first, "coffee:fr");
+            EXPECT_EQ(out.getVector()[0].second, 2.5);
+            EXPECT_EQ(out.getVector()[1].first, "tea:de");
+            EXPECT_EQ(out.getVector()[1].second, -3);
+            EXPECT_EQ(out.getVector()[2].first, "a:b:c");
+            EXPECT_EQ(out.getVector()[2].second, 0.25);
+            EXPECT_EQ(out.getVector()[3].first, ":x");
+            EXPECT_EQ(out.getVector()[3].second, 4);
+            EXPECT_EQ(out.getVector()[4].first, ":");
+            EXPECT_EQ(out.getVector()[4].second, 5);
+        }
+        { // malformed items: no ':' is skipped, a missing or non-numeric weight gives 0
+            dotproduct::wset::StringVector out;
+            WeightedSetParser::parse("{coffee,coffee:fr:,tea:de:x,:}", out);
+            ASSERT_EQ(out.getVector().size(), 3u);
+            EXPECT_EQ(out.getVector()[0].first, "coffee:fr");
+            EXPECT_EQ(out.getVector()[0].second, 0);
+            EXPECT_EQ(out.getVector()[1].first, "tea:de");
+            EXPECT_EQ(out.getVector()[1].second, 0);
+            EXPECT_EQ(out.getVector()[2].first, "");
+            EXPECT_EQ(out.getVector()[2].second, 0);
+        }
     }
     verifyArrayParser<int8_t>();
     verifyArrayParser<int16_t>();
@@ -1366,6 +1396,43 @@ TEST_F(ProdFeaturesTest, test_dot_product)
     verifyCorrectDotProductExecutor(_factory, "wsint", "{1:1}", "search::features::dotproduct::wset::(anonymous namespace)::SingleDotProductByWeightedValueExecutor<int>");
     verifyCorrectDotProductExecutor(_factory, "wsint", "{}", "search::features::SingleZeroValueExecutor");
 
+}
+
+TEST_F(ProdFeaturesTest, test_dot_product_with_colon_in_keys) {
+    auto attr =
+        AttributeBuilder("wscolon", AVC(AVBT::STRING, AVCT::WSET))
+            .fill_wset({{{"coffee:fr", 3}, {"tea:fr", 5}, {"x:y:z", 7}}, {{"coffee:de", 2}, {"coffee:fr", -1}}, {}})
+            .get();
+    auto query_tensor = vespalib::eval::SimpleValue::from_spec(vespalib::eval::TensorSpec("tensor(k{})")
+                                                                   .add({{"k", "coffee:fr"}}, 2)
+                                                                   .add({{"k", "x:y:z"}}, -1.5)
+                                                                   .add({{"k", "tea:de"}}, 4));
+    vespalib::nbostream stream;
+    vespalib::eval::encode_value(*query_tensor, stream);
+
+    FtFeatureTest ft(_factory, std::vector<std::string>{"dotProduct(wscolon,vector)", "dotProduct(wscolon,single)",
+                                                        "rankingExpression(dot)"});
+    ft.getIndexEnv().getBuilder().addField(FieldType::ATTRIBUTE, CollectionType::WEIGHTEDSET, "wscolon");
+    ft.getIndexEnv().getAttributeMap().add(attr);
+    ft.getIndexEnv().getProperties().add("rankingExpression(dot).rankingScript",
+                                         "reduce(tensorFromWeightedSet(attribute(wscolon),k)*query(q),sum)");
+    indexproperties::type::QueryFeature::set(ft.getIndexEnv().getProperties(), "q", "tensor(k{})");
+    ft.getQueryEnv().getProperties().add("dotProduct.vector", "{coffee:fr:2,x:y:z:-1.5,tea:de:4}");
+    ft.getQueryEnv().getProperties().add("dotProduct.single", "{x:y:z:2}");
+    ft.getQueryEnv().getProperties().add("query(q)", std::string_view(stream.peek(), stream.size()));
+    ASSERT_TRUE(ft.setup());
+
+    std::vector<feature_t> expected = {-4.5, -2, 0};
+    std::vector<feature_t> expected_single = {14, 0, 0};
+    for (uint32_t docid = 1; docid <= 3; ++docid) {
+        SCOPED_TRACE(docid);
+        RankResult result;
+        ASSERT_TRUE(ft.executeOnly(result, docid));
+        EXPECT_EQ(expected[docid - 1], result.getScore("dotProduct(wscolon,vector)"));
+        EXPECT_EQ(expected_single[docid - 1], result.getScore("dotProduct(wscolon,single)"));
+        // Same value as the dot product computed with a tensor built per document
+        EXPECT_EQ(result.getScore("dotProduct(wscolon,vector)"), result.getScore("rankingExpression(dot)"));
+    }
 }
 
 void

@@ -12,6 +12,7 @@ namespace search::features {
  *
  * The format of the weighted set is as follows:
  * {key1:weight1,key2:weight2,...,keyN:weightN}.
+ * The weight follows the last ':' of an item, so a key may contain ':'.
  */
 class WeightedSetParser
 {
