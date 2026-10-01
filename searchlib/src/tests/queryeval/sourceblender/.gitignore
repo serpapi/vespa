@@ -2,3 +2,4 @@
 Makefile
 sourceblender_test
 searchlib_sourceblender_test_app
+searchlib_sourceblender_benchmark_app
