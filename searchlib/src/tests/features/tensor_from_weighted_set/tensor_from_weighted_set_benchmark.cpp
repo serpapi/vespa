@@ -1,16 +1,20 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
-// Benchmark for tensorFromWeightedSet over a weightedset<string> attribute. Every thread sets up
-// its own rank program, like a match thread. In split mode the threads run one query and rank a
-// share of the documents each; in queries mode every thread runs its own query over all
-// documents. The time includes tearing down the rank programs, but not setting them up.
+// Benchmark for tensorFromWeightedSet over a weightedset<string> attribute, alone and in a sparse
+// dot product with a query tensor, compared with the dotProduct feature computing the same value.
+// Every thread sets up its own rank program, like a match thread. In split mode the threads run
+// one query and rank a share of the documents each; in queries mode every thread runs its own
+// query over all documents. The time includes tearing down the rank programs, but not setting
+// them up.
 //
-// usage: searchlib_tensor_from_weighted_set_benchmark_app [docs] [repeats] [max threads] [resident labels]
-//                                                         [split|queries]
+// usage: searchlib_tensor_from_weighted_set_benchmark_app [docs] [repeats] [threads] [resident labels]
+//                                                         [split|queries] [query labels]
 //
-// Resident labels are held in the SharedStringRepo while benchmarking, like the labels of mapped
-// tensor attributes and other queries in a running search node. Voluntary context switches are
-// counted per query; a thread blocking on a contended mutex causes them.
+// Threads is a comma-separated list of thread counts. Resident labels are held in the
+// SharedStringRepo while benchmarking, like the labels of mapped tensor attributes and other
+// queries in a running search node. Voluntary context switches are counted per query; a thread
+// blocking on a contended mutex causes them. Each label distribution is a test, so
+// --gtest_filter selects them.
 
 #include <vespa/eval/eval/fast_value.h>
 #include <vespa/eval/eval/tensor_spec.h>
@@ -27,6 +31,7 @@
 #include <vespa/searchlib/fef/matchdatalayout.h>
 #include <vespa/searchlib/fef/rank_program.h>
 #include <vespa/searchlib/fef/test/indexenvironment.h>
+#include <vespa/searchlib/fef/test/indexenvironmentbuilder.h>
 #include <vespa/searchlib/fef/test/queryenvironment.h>
 #include <vespa/vespalib/gtest/gtest.h>
 #include <vespa/vespalib/objects/nbostream.h>
@@ -37,9 +42,11 @@
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <random>
+#include <sstream>
 
 using namespace search::fef;
 using namespace search::fef::test;
@@ -56,12 +63,13 @@ using AVC = search::attribute::Config;
 using AVBT = search::attribute::BasicType;
 using AVCT = search::attribute::CollectionType;
 
-size_t num_docs = 50000;
-size_t labels_per_doc = 40;
-size_t num_repeats = 7;
-size_t max_threads = 16;
-size_t resident_labels = 0;
-bool   concurrent_queries = false;
+size_t              num_docs = 50000;
+size_t              labels_per_doc = 40;
+size_t              num_repeats = 7;
+std::vector<size_t> thread_counts = {1, 4, 16};
+size_t              resident_labels = 0;
+bool                concurrent_queries = false;
+size_t              num_query_labels = 40;
 
 uint64_t voluntary_context_switches() {
 #ifdef RUSAGE_THREAD
@@ -81,6 +89,42 @@ std::string label_name(size_t id) {
 
 using DocLabels = std::vector<std::pair<size_t, int32_t>>;
 using LabelGenerator = std::function<DocLabels(uint32_t docid, std::mt19937& rnd)>;
+using QueryLabels = std::function<size_t(size_t i)>;
+
+// Labels of query(q), weight 1 each; label i is used by the first i+1 query labels
+size_t spread_query_label(size_t i) noexcept {
+    return (i * 7919) % 500000;
+}
+
+size_t most_common_query_label(size_t i) noexcept {
+    return i;
+}
+
+size_t most_common_universe_label(size_t i) noexcept {
+    return 5000 + i;
+}
+
+// Draws label ids 0..(size-1) with probability proportional to 1/(id+1)^exponent
+class ZipfLabels {
+    std::vector<double> _cdf;
+
+public:
+    ZipfLabels(size_t size, double exponent) : _cdf(size) {
+        double sum = 0.0;
+        for (size_t i = 0; i < size; ++i) {
+            sum += std::pow(double(i + 1), -exponent);
+            _cdf[i] = sum;
+        }
+        for (double& x : _cdf) {
+            x /= sum;
+        }
+    }
+    size_t operator()(std::mt19937& rnd) const {
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        size_t id = std::lower_bound(_cdf.begin(), _cdf.end(), uniform(rnd)) - _cdf.begin();
+        return std::min(id, _cdf.size() - 1);
+    }
+};
 
 // Same formula as a uniform synthetic corpus with a 500k label vocabulary; labels rarely repeat.
 DocLabels uniform_labels(uint32_t docid, std::mt19937& rnd) {
@@ -134,6 +178,34 @@ DocLabels small_vocab_labels(uint32_t docid, std::mt19937& rnd) {
     return result;
 }
 
+// Heavy-tailed label counts: 21% of the documents have no labels, the median is 4, the 90th
+// percentile 78 and the maximum 1904. With probability topical a label is drawn from a pool of
+// 5000 labels shared by the documents a query ranks, otherwise from a universe of 10M labels.
+LabelGenerator heavy_tailed_labels(double topical) {
+    auto topic = std::make_shared<ZipfLabels>(5000, 0.6);
+    auto universe = std::make_shared<ZipfLabels>(10000000, 0.85);
+    return [topic, universe, topical](uint32_t docid, std::mt19937& rnd) {
+        std::bernoulli_distribution   no_labels(0.21);
+        std::lognormal_distribution<> count(2.068, 2.006);
+        std::bernoulli_distribution   from_topic(topical);
+        std::vector<size_t>           ids;
+        size_t wanted = no_labels(rnd) ? 0 : std::clamp<size_t>(std::lround(count(rnd)), 1, 1904);
+        while (ids.size() < wanted) {
+            while (ids.size() < wanted) {
+                ids.push_back(from_topic(rnd) ? (*topic)(rnd) : 5000 + (*universe)(rnd));
+            }
+            std::sort(ids.begin(), ids.end());
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        }
+        std::shuffle(ids.begin(), ids.end(), rnd);
+        DocLabels result;
+        for (size_t id : ids) {
+            result.emplace_back(id, 1 + ((docid + result.size()) % 7));
+        }
+        return result;
+    };
+}
+
 AttributeVector::SP make_attribute(const LabelGenerator& gen) {
     auto attr = AttributeFactory::createAttribute("labels", AVC(AVBT::STRING, AVCT::WSET));
     attr->addReservedDoc();
@@ -152,11 +224,11 @@ AttributeVector::SP make_attribute(const LabelGenerator& gen) {
     return attr;
 }
 
-// query(q) as in the synthetic corpus benchmark: 40 labels with weight 1
-std::string make_query_tensor() {
+// query(q) with weight 1 for each label, as a tensor and as a vector for the dotProduct feature
+std::string make_query_tensor(const QueryLabels& query_label) {
     TensorSpec spec("tensor(k{})");
-    for (size_t j = 0; j < 40; ++j) {
-        spec.add({{"k", label_name((j * 7919) % 500000)}}, 1.0);
+    for (size_t i = 0; i < num_query_labels; ++i) {
+        spec.add({{"k", label_name(query_label(i))}}, 1.0);
     }
     auto                value = vespalib::eval::value_from_spec(spec, FastValueBuilderFactory::get());
     vespalib::nbostream stream;
@@ -164,13 +236,25 @@ std::string make_query_tensor() {
     return {stream.peek(), stream.size()};
 }
 
+std::string make_query_vector(const QueryLabels& query_label) {
+    std::string result("{");
+    for (size_t i = 0; i < num_query_labels; ++i) {
+        result.append(i > 0 ? "," : "").append(label_name(query_label(i))).append(":1");
+    }
+    return result.append("}");
+}
+
 struct Setup {
     BlueprintFactory      factory;
     IndexEnvironment      index_env;
     BlueprintResolver::SP resolver;
     std::string           query_tensor;
-    Setup(AttributeVector::SP attr, const std::string& feature) : factory(), index_env(), resolver(), query_tensor() {
+    std::string           query_vector;
+    Setup(AttributeVector::SP attr, const std::string& feature, const QueryLabels& query_label)
+        : factory(), index_env(), resolver(), query_tensor(), query_vector() {
         search::features::setup_search_features(factory);
+        IndexEnvironmentBuilder(index_env).addField(FieldType::ATTRIBUTE, FieldInfo::CollectionType::WEIGHTEDSET,
+                                                    FieldInfo::DataType::STRING, "labels");
         index_env.getAttributeMap().add(std::move(attr));
         indexproperties::type::QueryFeature::set(index_env.getProperties(), "q", "tensor(k{})");
         index_env.getProperties().add("rankingExpression(first_phase).rankingScript",
@@ -178,7 +262,8 @@ struct Setup {
         resolver = std::make_shared<BlueprintResolver>(factory, index_env);
         resolver->addSeed(feature);
         EXPECT_TRUE(resolver->compile());
-        query_tensor = make_query_tensor();
+        query_tensor = make_query_tensor(query_label);
+        query_vector = make_query_vector(query_label);
     }
     ~Setup();
 };
@@ -192,6 +277,7 @@ struct Query {
     Query(Setup& setup)
         : env(&setup.index_env), layout(), match_data(layout.createMatchData()), program(setup.resolver) {
         env.getProperties().add("query(q)", setup.query_tensor);
+        env.getProperties().add("dotProduct.q", setup.query_vector);
         for (const auto& spec : setup.resolver->getExecutorSpecs()) {
             spec.blueprint->prepareSharedState(env, env.getObjectStore());
         }
@@ -236,15 +322,13 @@ Result rank_all_documents(Setup& setup, size_t num_threads) {
     return Nexus::run(num_threads, task, merge);
 }
 
-void benchmark(const std::string& name, const LabelGenerator& gen) {
+void benchmark(const std::string& name, const LabelGenerator& gen, const QueryLabels& query_label) {
     auto attr = make_attribute(gen);
-    for (const std::string feature : {"tensorFromWeightedSet(attribute(labels),k)", "rankingExpression(first_phase)"})
+    for (const std::string feature :
+         {"tensorFromWeightedSet(attribute(labels),k)", "rankingExpression(first_phase)", "dotProduct(labels,q)"})
     {
-        Setup setup(attr, feature);
-        for (size_t num_threads : {1, 4, 16}) {
-            if (num_threads > max_threads) {
-                continue;
-            }
+        Setup setup(attr, feature, query_label);
+        for (size_t num_threads : thread_counts) {
             std::vector<double>   times;
             std::vector<uint64_t> switches;
             double                checksum = 0.0;
@@ -260,25 +344,33 @@ void benchmark(const std::string& name, const LabelGenerator& gen) {
             size_t num_queries = concurrent_queries ? num_threads : 1;
             double docs_per_thread = concurrent_queries ? num_docs : double(num_docs) / num_threads;
             fprintf(stderr,
-                    "%-10s %-7s resident: %7zu %-43s threads: %2zu, ms per query: %7.2f (min %7.2f), "
-                    "ns per doc and thread: %6.0f, context switches per query: %7.0f, checksum: %g\n",
+                    "%-12s %-7s resident: %7zu %-43s query labels: %2zu threads: %2zu, ms per query: %7.2f "
+                    "(min %7.2f), ns per doc and thread: %6.0f, context switches per query: %7.0f, checksum: %g\n",
                     name.c_str(), concurrent_queries ? "queries" : "split", resident_labels, feature.c_str(),
-                    num_threads, median * 1000.0, times[0] * 1000.0, median * 1e9 / docs_per_thread,
+                    num_query_labels, num_threads, median * 1000.0, times[0] * 1000.0, median * 1e9 / docs_per_thread,
                     double(switches[switches.size() / 2]) / num_queries, checksum);
         }
     }
 }
 
 TEST(TensorFromWeightedSetBenchmark, uniform_labels) {
-    benchmark("uniform", uniform_labels);
+    benchmark("uniform", uniform_labels, spread_query_label);
 }
 
 TEST(TensorFromWeightedSetBenchmark, zipf_labels) {
-    benchmark("zipf", zipf_labels());
+    benchmark("zipf", zipf_labels(), spread_query_label);
 }
 
 TEST(TensorFromWeightedSetBenchmark, small_vocabulary) {
-    benchmark("vocab_1000", small_vocab_labels);
+    benchmark("vocab_1000", small_vocab_labels, spread_query_label);
+}
+
+TEST(TensorFromWeightedSetBenchmark, heavy_tailed_topical_labels) {
+    benchmark("tail_topical", heavy_tailed_labels(0.75), most_common_query_label);
+}
+
+TEST(TensorFromWeightedSetBenchmark, heavy_tailed_scattered_labels) {
+    benchmark("tail_scatter", heavy_tailed_labels(0.0), most_common_universe_label);
 }
 
 int main(int argc, char** argv) {
@@ -290,13 +382,20 @@ int main(int argc, char** argv) {
         num_repeats = std::stoul(argv[2]);
     }
     if (argc > 3) {
-        max_threads = std::stoul(argv[3]);
+        thread_counts.clear();
+        std::istringstream list(argv[3]);
+        for (std::string count; std::getline(list, count, ',');) {
+            thread_counts.push_back(std::stoul(count));
+        }
     }
     if (argc > 4) {
         resident_labels = std::stoul(argv[4]);
     }
     if (argc > 5) {
         concurrent_queries = (std::string(argv[5]) == "queries");
+    }
+    if (argc > 6) {
+        num_query_labels = std::stoul(argv[6]);
     }
     vespalib::SharedStringRepo::Handles resident;
     for (size_t i = 0; i < resident_labels; ++i) {
