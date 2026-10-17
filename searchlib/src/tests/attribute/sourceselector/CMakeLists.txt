@@ -7,3 +7,9 @@ vespa_add_executable(searchlib_sourceselector_test_app TEST
     GTest::gtest
 )
 vespa_add_test(NAME searchlib_sourceselector_test_app COMMAND searchlib_sourceselector_test_app)
+vespa_add_executable(searchlib_sourceselector_clone_benchmark_app
+    SOURCES
+    sourceselector_clone_benchmark.cpp
+    DEPENDS
+    vespa_searchlib
+)
