@@ -2,3 +2,4 @@
 Makefile
 sourceselector_test
 searchlib_sourceselector_test_app
+searchlib_sourceselector_clone_benchmark_app
