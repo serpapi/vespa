@@ -7,7 +7,11 @@
 #include "search_context.h"
 #include <vespa/vespalib/util/atomic.h>
 #include <vespa/vespalib/util/rcuvector.h>
+#include <atomic>
+#include <cassert>
 #include <limits>
+#include <span>
+#include <type_traits>
 
 namespace search {
 
@@ -66,6 +70,40 @@ public:
 
     void set(DocId doc, T v) {
         vespalib::atomic::store_ref_relaxed(_data[doc], v);
+    }
+
+    /**
+     * Gives an empty attribute num_docs docs in one step instead of num_docs calls to addDoc().
+     * fill must write every value in the span it is given. The docs become visible to readers
+     * at the next commit(), as with addDoc().
+     */
+    template <typename Fill>
+    void init_docs(uint32_t num_docs, Fill &&fill) {
+        static_assert(std::is_nothrow_invocable_v<Fill &, std::span<T>>);
+        assert(B::getNumDocs() == 0 && B::getCommittedDocIdLimit() == 0);
+        if (num_docs == 0) {
+            return;
+        }
+        bool incGen = num_docs > _data.capacity();
+        _data.reserve(num_docs);
+        _data.unsafe_resize(num_docs);
+        fill(std::span<T>(&_data[0], num_docs));
+        std::atomic_thread_fence(std::memory_order_release);
+        B::setNumDocs(num_docs);
+        this->updateUncommittedDocIdLimit(num_docs - 1);
+        if (incGen) {
+            this->incGeneration();
+        } else {
+            this->reclaim_unused_memory();
+        }
+    }
+
+    /**
+     * Values of all docs, uncommitted ones included. Only for the writer or a thread
+     * that excludes the writer; invalidated when the attribute grows.
+     */
+    std::span<const T> get_values_for_writer() const {
+        return _data.make_read_view(B::getNumDocs());
     }
 
     T getFast(DocId doc) const {

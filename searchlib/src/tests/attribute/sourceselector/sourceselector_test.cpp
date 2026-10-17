@@ -3,10 +3,13 @@
 
 #include <vespa/searchlib/attribute/fixedsourceselector.h>
 #include <vespa/searchlib/index/dummyfileheadercontext.h>
+#include <vespa/searchcommon/attribute/config.h>
 #include <vespa/searchcommon/common/undefinedvalues.h>
 #include <vespa/vespalib/gtest/gtest.h>
 #include <vespa/vespalib/util/size_literals.h>
 #include <filesystem>
+#include <limits>
+#include <span>
 
 using std::unique_ptr;
 using std::string;
@@ -212,6 +215,180 @@ TEST_F(SourceSelectorTest, require_that_correct_default_value_is_used_after_comp
     EXPECT_EQ(default_source, (uint32_t) it->getSource(7));
 }
 
+using SourceStore = queryeval::sourceselector::Iterator::SourceStore;
+
+// Reaches the selector's attribute, including lids at or above the committed docid limit.
+struct SelectorPeek : public FixedSourceSelector {
+    static SourceStore &store(FixedSourceSelector &selector) {
+        return static_cast<SourceStore &>(*(selector.*(&SelectorPeek::_realSource)));
+    }
+};
+
+uint8_t expected_new_source(uint8_t source, uint32_t diff) {
+    return (source > diff) ? source - diff : 0;
+}
+
+std::vector<uint8_t> all_bytes(FixedSourceSelector &selector) {
+    SourceStore &store = SelectorPeek::store(selector);
+    std::vector<uint8_t> result;
+    for (uint32_t lid = 0; lid < store.getNumDocs(); ++lid) {
+        result.push_back(static_cast<uint8_t>(store.getFast(lid)));
+    }
+    return result;
+}
+
+TEST_F(SourceSelectorTest, require_that_constructor_initializes_every_doc_to_default_source)
+{
+    for (uint32_t num_docs : {0u, 1u, 2u, 63u, 64u, 65u, 4095u, 4096u, 4097u}) {
+        SCOPED_TRACE(num_docs);
+        FixedSourceSelector selector(default_source, base_file_name, num_docs);
+        SourceStore &store = SelectorPeek::store(selector);
+        EXPECT_EQ(num_docs, selector.getDocIdLimit());
+        EXPECT_EQ(num_docs + 1, store.getNumDocs());
+        EXPECT_EQ(num_docs + 1, store.getCommittedDocIdLimit());
+        EXPECT_EQ(std::vector<uint8_t>(num_docs + 1, default_source), all_bytes(selector));
+    }
+}
+
+TEST_F(SourceSelectorTest, require_that_clone_and_subtract_maps_every_source_byte)
+{
+    for (uint32_t diff : {0u, 1u, 2u, 7u, 200u, 253u, 254u, 255u, 256u, 1000u, std::numeric_limits<uint32_t>::max()}) {
+        SCOPED_TRACE(diff);
+        FixedSourceSelector selector(default_source, base_file_name, 300);
+        selector.setBaseId(base_id);
+        SourceStore &store = SelectorPeek::store(selector);
+        std::vector<uint8_t> sources;
+        for (uint32_t lid = 0; lid < store.getNumDocs(); ++lid) {
+            uint8_t source = lid % 256;
+            if (expected_new_source(source, diff) >= ISourceSelector::SOURCE_LIMIT) {
+                source = default_source;
+            }
+            store.set(lid, static_cast<int8_t>(source));
+            sources.push_back(source);
+        }
+        store.commit();
+        auto clone = selector.cloneAndSubtract(base_file_name2, diff);
+        std::vector<uint8_t> expected;
+        for (uint8_t source : sources) {
+            expected.push_back(expected_new_source(source, diff));
+        }
+        EXPECT_EQ(expected, all_bytes(*clone));
+        EXPECT_EQ(expected_new_source(default_source, diff), clone->getDefaultSource());
+        EXPECT_EQ(base_id + diff, clone->getBaseId());
+        EXPECT_EQ(300u, clone->getDocIdLimit());
+        EXPECT_EQ(301u, SelectorPeek::store(*clone).getCommittedDocIdLimit());
+    }
+}
+
+TEST_F(SourceSelectorTest, require_that_clone_and_subtract_copies_lids_above_compacted_limit)
+{
+    FixedSourceSelector selector(default_source, base_file_name);
+    for (uint32_t lid = 0; lid < 100; ++lid) {
+        selector.setSource(lid, lid % 8);
+    }
+    selector.compactLidSpace(50);
+    auto source_bytes = all_bytes(selector);
+    ASSERT_EQ(101u, source_bytes.size());
+    auto clone = selector.cloneAndSubtract(base_file_name2, 2);
+    std::vector<uint8_t> expected;
+    for (uint8_t source : source_bytes) {
+        expected.push_back(expected_new_source(source, 2));
+    }
+    EXPECT_EQ(expected, all_bytes(*clone));
+    EXPECT_EQ(50u, clone->getDocIdLimit());
+    EXPECT_EQ(128u - 2, expected[51]); // cleared by compactLidSpace to undefined (0x80), then subtracted
+    clone->setSource(60, 3);
+    EXPECT_EQ(61u, clone->getDocIdLimit());
+    EXPECT_EQ(3u, (uint32_t) clone->createIterator()->getSource(60));
+}
+
+TEST_F(SourceSelectorTest, require_that_empty_selector_can_be_cloned)
+{
+    FixedSourceSelector selector(default_source, base_file_name, std::numeric_limits<uint32_t>::max());
+    auto clone = selector.cloneAndSubtract(base_file_name2, 1);
+    EXPECT_EQ(0u, SelectorPeek::store(*clone).getNumDocs());
+    EXPECT_EQ(0u, SelectorPeek::store(*clone).getCommittedDocIdLimit());
+    EXPECT_EQ(default_source - 1, clone->getDefaultSource());
+    clone->setSource(3, 2);
+    EXPECT_EQ(4u, clone->getDocIdLimit());
+    EXPECT_EQ(std::vector<uint8_t>({default_source - 1, default_source - 1, default_source - 1, 2, default_source - 1}),
+              all_bytes(*clone));
+}
+
+void clone_with_source_byte(uint8_t source, uint32_t diff) {
+    FixedSourceSelector selector(default_source, base_file_name, 70);
+    SelectorPeek::store(selector).set(65, static_cast<int8_t>(source));
+    SelectorPeek::store(selector).commit();
+    auto clone = selector.cloneAndSubtract(base_file_name2, diff);
+    EXPECT_EQ(source - diff, (uint32_t) clone->createIterator()->getSource(65));
+}
+
+TEST_F(SourceSelectorTest, require_that_clone_and_subtract_rejects_new_sources_at_or_above_limit)
+{
+    EXPECT_DEATH(clone_with_source_byte(255, 1), "SOURCE_LIMIT");
+    EXPECT_DEATH(clone_with_source_byte(254, 0), "SOURCE_LIMIT");
+    clone_with_source_byte(255, 2);
+}
+
+uint64_t generation(FixedSourceSelector &selector) {
+    return SelectorPeek::store(selector).getCurrentGeneration().value();
+}
+
+TEST_F(SourceSelectorTest, require_that_generation_count_does_not_depend_on_lid_count)
+{
+    std::vector<uint64_t> constructed;
+    std::vector<uint64_t> cloned;
+    for (uint32_t num_docs : {1_Mi, 4_Mi}) {
+        FixedSourceSelector selector(default_source, base_file_name, num_docs - 1);
+        constructed.push_back(generation(selector));
+        auto clone = selector.cloneAndSubtract(base_file_name2, 1);
+        cloned.push_back(generation(*clone));
+        EXPECT_EQ(num_docs, SelectorPeek::store(*clone).getNumDocs());
+    }
+    EXPECT_EQ(constructed[0], constructed[1]);
+    EXPECT_EQ(cloned[0], cloned[1]);
+}
+
+TEST_F(SourceSelectorTest, require_that_clone_and_subtract_leaves_room_to_grow)
+{
+    const uint32_t num_docs = 1_Mi;
+    FixedSourceSelector selector(default_source, base_file_name, num_docs - 1);
+    auto clone = selector.cloneAndSubtract(base_file_name2, 1);
+    auto before = generation(*clone);
+    clone->setSource(num_docs + 5, 2);
+    EXPECT_EQ(before + 1, generation(*clone)); // the commit in setSource(), no reallocation
+    EXPECT_EQ(num_docs + 6, clone->getDocIdLimit());
+    EXPECT_EQ(2u, (uint32_t) clone->createIterator()->getSource(num_docs + 5));
+    EXPECT_EQ(default_source - 1, (uint32_t) clone->createIterator()->getSource(num_docs + 6));
+}
+
+TEST(SourceStoreTest, require_that_init_docs_fills_empty_attribute_and_holds_old_buffer_for_readers)
+{
+    auto store = std::make_shared<SourceStore>(base_file_name, attribute::Config(attribute::BasicType::INT8));
+    const uint32_t num_docs = 1_Mi;
+    {
+        AttributeGuard guard(store);
+        store->init_docs(num_docs, [](std::span<int8_t> values) noexcept {
+            for (size_t i = 0; i < values.size(); ++i) {
+                values[i] = static_cast<int8_t>(i % 5);
+            }
+        });
+        EXPECT_EQ(num_docs, store->getNumDocs());
+        EXPECT_EQ(0u, store->getCommittedDocIdLimit());
+        store->commit(CommitParam::UpdateStats::FORCE);
+        EXPECT_EQ(num_docs, store->getCommittedDocIdLimit());
+        EXPECT_LT(0u, store->getStatus().getOnHold());
+    }
+    store->commit(CommitParam::UpdateStats::FORCE);
+    EXPECT_EQ(0u, store->getStatus().getOnHold());
+    EXPECT_LE(num_docs, store->getStatus().getAllocated());
+    auto values = store->get_values_for_writer();
+    ASSERT_EQ(num_docs, values.size());
+    for (uint32_t lid = 0; lid < num_docs; ++lid) {
+        ASSERT_EQ(static_cast<int8_t>(lid % 5), values[lid]);
+    }
+    EXPECT_DEATH(store->init_docs(1, [](std::span<int8_t>) noexcept {}), "getNumDocs");
+}
 
 }  // namespace
 

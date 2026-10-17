@@ -2,6 +2,7 @@
 
 #include "fixedsourceselector.h"
 #include <vespa/searchcommon/attribute/config.h>
+#include <algorithm>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".searchlib.attribute.fixed_source_selector");
@@ -41,7 +42,10 @@ FixedSourceSelector::FixedSourceSelector(queryeval::Source defaultSource,
     _source(static_cast<SourceStore &>(*_realSource))
 {
     if (initialNumDocs != std::numeric_limits<uint32_t>::max()) {
-        reserve(initialNumDocs);
+        const auto defaultValue = static_cast<int8_t>(getDefaultSource());
+        _source.init_docs(initialNumDocs + 1, [defaultValue](std::span<int8_t> values) noexcept {
+            std::fill(values.begin(), values.end(), defaultValue);
+        });
         _source.commit();
     }
 }
