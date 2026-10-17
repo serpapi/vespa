@@ -1,0 +1,250 @@
+-- Vespa build platform is almalinux 8.10
+-- Setting VESPA_UNPRIVILEGED to yes
+-- Setting VESPA_USER to root
+-- Setting VESPA_GROUP to root
+-- Setting VESPA_DEPS_PREFIX to /opt/vespa-deps
+-- DEFAULT_CMAKE_PREFIX_PATH is /opt/vespa-deps
+-- Setting CMAKE_PREFIX_PATH to /opt/vespa-deps
+-- Found LLVM 21.1.8
+-- Using LLVMConfig.cmake in: /usr/lib64/cmake/llvm
+-- LLVM_INCLUDE_DIRS is /usr/include
+-- LLVM_LIBRARY_DIRS is /usr/lib64
+-- LLVM_INCLUDE_DIR is /usr/include
+-- LLVM_MAIN_INCLUDE_DIR is /usr/include
+-- LLVM_LIBRARY_DIR is /usr/lib64
+-- Setting up default build settings for for almalinux 8.10
+-- CMAKE_SYSTEM_PROCESSOR = aarch64
+-- DEFAULT_EXTRA_LINK_DIRECTORY is /opt/vespa-deps/lib64
+-- DEFAULT_EXTRA_INCLUDE_DIRECTORY is /opt/vespa-deps/include
+-- DEFAULT_VESPA_LLVM_VERSION is 21
+-- DEFAULT_VESPA_CPU_ARCH_FLAGS is -march=armv8.2-a+dotprod+crypto -mtune=neoverse-n1
+-- Setting EXTRA_INCLUDE_DIRECTORY to /opt/vespa-deps/include
+-- Setting EXTRA_LINK_DIRECTORY to /opt/vespa-deps/lib64
+-- Setting CMAKE_INSTALL_RPATH to /root/vespa/lib64;/opt/vespa-deps/lib64
+-- Setting VESPA_LLVM_VERSION to 21
+-- Setting VESPA_CPU_ARCH_FLAGS to -march=armv8.2-a+dotprod+crypto -mtune=neoverse-n1
+-- liburing not found
+-- CMAKE_SHARED_LINKER_FLAGS is  -Wl,--build-id -latomic -ldl -Wl,-E
+-- Using ccache /usr/bin/ccache
+-- VESPA_VERSION is 8.0.0
+-- Configuring done (0.6s)
+-- Generating done (4.3s)
+-- Build files have been written to: /work/build
+[  0%] Built target defaults+source
+[  0%] Built target configgen_config_configfetcher_test_app_my
+[  0%] Built target protobufgen_searchlib_engine
+[  0%] Built target configgen_config_configparser_test_app_foo
+[  0%] Built target configgen_config_print_test_app_motd
+[  0%] Built target configgen_config_print_test_app_my
+[  0%] Built target configgen_config_api_test_app_my
+[  0%] Built target configgen_config_unittest_test_app_my
+[  0%] Built target configgen_config_unittest_test_app_foo
+[  0%] Built target configgen_config_unittest_test_app_bar
+[  0%] Built target configgen_config_file_subscription_test_app_foo
+[  0%] Built target configgen_config_file_subscription_test_app_my
+[  0%] Built target configgen_config_file_subscription_test_app_bar
+[  0%] Built target configgen_config_file_subscription_test_app_foobar
+[  0%] Built target configgen_config_file_subscription_test_app_foodefault
+[  0%] Built target configgen_config_legacysubscriber_test_app_foo
+[  0%] Built target configgen_config_legacysubscriber_test_app_bar
+[  0%] Built target configgen_config_legacysubscriber_test_app_my
+[  0%] Built target configgen_config_subscriber_test_app_foo
+[  0%] Built target configgen_config_subscriber_test_app_bar
+[  0%] Built target configgen_config_subscriber_test_app_baz
+[  0%] Built target configgen_config_configagent_test_app_my
+[  0%] Built target configgen_config_getconfig_test_app_my
+[  0%] Built target configgen_config_configgen_test_app_motd
+[  0%] Built target configgen_config_configmanager_test_app_my
+[  0%] Built target configgen_config_configformat_test_app_my
+[  0%] Built target configgen_config_raw_subscription_test_app_my
+[  0%] Built target configgen_config_frt_test_app_my
+[  0%] Built target configgen_config_configretriever_test_app_foo
+[  0%] Built target configgen_config_configretriever_test_app_bar
+[  0%] Built target configgen_config_configuri_test_app_my
+[  0%] Built target configgen_config_frt_test_app_bar
+[  0%] Built target configgen_config_configretriever_test_app_bootstrap
+[  0%] Built target configgen_config_failover_test_app_my
+[  0%] Built target configgen_config_functiontest_test_app_function-test
+[  0%] Built target configgen_config_subscription_test_app_my
+[  0%] Built target configgen_vespa_configdefinitions_object_dataplane-proxy
+[  0%] Built target configgen_vespa_configdefinitions_object_attributes
+[  0%] Built target configgen_vespa_configdefinitions_object_application-id
+[  0%] Built target configgen_vespa_configdefinitions_object_cluster-info
+[  0%] Built target configgen_vespa_configdefinitions_object_configserver
+[  0%] Built target configgen_vespa_configdefinitions_object_cluster-list
+[  0%] Built target configgen_vespa_configdefinitions_object_curator
+[  0%] Built target configgen_vespa_configdefinitions_object_dispatch-nodes
+[  0%] Built target configgen_vespa_configdefinitions_object_dispatch
+[  0%] Built target configgen_vespa_configdefinitions_object_fleetcontroller
+[  0%] Built target configgen_vespa_configdefinitions_object_ilscripts
+[  0%] Built target configgen_vespa_configdefinitions_object_imported-fields
+[  0%] Built target configgen_vespa_configdefinitions_object_indexschema
+[  0%] Built target configgen_vespa_configdefinitions_object_load-type
+[  0%] Built target configgen_vespa_configdefinitions_object_lb-services
+[  0%] Built target configgen_vespa_configdefinitions_object_logforwarder
+[  0%] Built target configgen_vespa_configdefinitions_object_open-telemetry
+[  0%] Built target configgen_vespa_configdefinitions_object_messagetyperouteselectorpolicy
+[  0%] Built target configgen_vespa_configdefinitions_object_model
+[  0%] Built target configgen_vespa_configdefinitions_object_orchestrator
+[  0%] Built target configgen_vespa_configdefinitions_object_persistence
+[  0%] Built target configgen_vespa_configdefinitions_object_rank-profiles
+[  0%] Built target configgen_vespa_configdefinitions_object_sentinel
+[  0%] Built target configgen_vespa_configdefinitions_object_reindexing
+[  0%] Built target configgen_vespa_configdefinitions_object_slobroks
+[  0%] Built target configgen_vespa_configdefinitions_object_distribution
+[  0%] Built target configgen_vespa_configdefinitions_object_summary
+[  0%] Built target configgen_vespa_configdefinitions_object_specialtokens
+[  0%] Built target configgen_vespa_configdefinitions_object_upgrading
+[  0%] Built target configgen_vespa_configdefinitions_object_zookeeper-server
+[  0%] Built target configgen_vespa_configdefinitions_object_stor-distribution
+[  0%] Built target configgen_vespa_configdefinitions_object_zookeepers
+[  0%] Built target configgen_vespa_configdefinitions_object_stor-filestor
+[  0%] Built target configgen_vespa_configdefinitions_object_bucketspaces
+[  0%] Built target configgen_vespa_configdefinitions_object_all-clusters-bucket-spaces
+[  0%] Built target configgen_vespa_configdefinitions_object_stateserver
+[  0%] Built target configgen_vespa_configdefinitions_object_ranking-constants
+[  0%] Built target configgen_vespa_configdefinitions_object_ranking-expressions
+[  0%] Built target configgen_vespa_configdefinitions_object_onnx-models
+[  0%] Built target configgen_vespa_configdefinitions_object_proton
+[  0%] Built target configgen_vespa_configdefinitions_object_hwinfo
+[  0%] Built target flexgen_document_select
+[  0%] Built target configgen_document_documentconfig_documenttypes
+[  0%] Built target bisongen_document_select
+[  0%] Built target configgen_vespa_metrics_object_metricsmanager
+[  0%] Built target configgen_searchlib_sconfig_translogserver
+[  0%] Built target vespalog+source
+[  0%] Built target vespadefaults_object
+[  0%] Built target vespalib+source
+[  0%] Built target vespadefaults
+[  0%] Built target fnet+source
+[  0%] Built target eval+source
+[  0%] Built target vespalib_fastlib_io
+[  0%] Built target vespalib_fastlib_text
+[  0%] Built target vespalib_fastos
+[  3%] Built target vespalib_vespalib_component
+[  3%] Built target vespalog_object
+[  3%] Built target vespalib_vespalib_crypto
+[  3%] Built target vespalib_vespalib_coro
+[  3%] Built target vespalib_vespalib_btree
+[  3%] Built target vespalib_vespalib_data
+[  3%] Built target vespalib_vespalib_geo
+[  3%] Built target vespalib_vespalib_locale
+[  3%] Built target vespalib_vespalib_encoding
+[  3%] Built target vespalib_vespalib_io
+[  3%] Built target vespalib_vespalib_fuzzy
+[  3%] Built target vespalib_vespalib_process
+[  3%] Built target vespalib_vespalib_net
+[  3%] Built target vespalib_vespalib_net_http
+[  3%] Built target vespalib_vespalib_net_tls_impl
+[  3%] Built target vespalib_vespalib_portal
+[  3%] Built target vespalib_vespalib_data_slime
+[  7%] Built target vespalib_vespalib_datastore
+[  7%] Built target vespalib_vespalib_regex
+[  7%] Built target vespalib_vespalib_objects
+[  7%] Built target vespalib_vespalib_stllike
+[ 11%] Built target vespalib_vespalib_metrics
+[ 11%] Built target vespalib_vespalib_text
+[ 11%] Built target vespalib_vespalib_time
+[ 14%] Built target vespalib_vespalib_net_tls
+[ 14%] Built target vespalib_vespalib_trace
+[ 18%] Built target vespalib_vespalib_test
+[ 18%] Built target eval_eval_value_cache
+[ 18%] Built target eval_gp
+[ 18%] Built target eval_eval_llvm
+[ 18%] Built target eval_onnx
+[ 18%] Built target vespalog
+[ 18%] Built target eval_eval_test
+[ 18%] Built target config+source
+[ 22%] Built target eval_streamed
+[ 22%] Built target vespa_hwaccelerated_object
+[ 22%] Built target configdefinitions+source
+[ 22%] Built target document+source
+[ 22%] Built target metrics+source
+[ 22%] Built target config_configgen
+[ 22%] Built target fnet_frt
+[ 22%] Built target config_file
+[ 22%] Built target config_file_acquirer
+[ 22%] Built target vespa_fnet_object
+[ 22%] Built target config_common
+[ 25%] Built target config_helper
+[ 25%] Built target eval_eval
+[ 25%] Built target config_raw
+[ 25%] Built target config_set
+[ 25%] Built target config_print
+[ 25%] Built target config_retriever
+[ 25%] Built target config_frt
+[ 25%] Built target document_annotation
+[ 25%] Built target config_subscription
+[ 25%] Built target document_documentconfig
+[ 25%] Built target document_bucket
+[ 25%] Built target document_fieldset
+[ 25%] Built target document_base
+[ 29%] Built target eval_instruction
+[ 29%] Built target document_predicate
+[ 29%] Built target document_repo
+[ 33%] Built target document_datatypes
+[ 29%] Built target document_serialization
+[ 33%] Built target document_test
+[ 33%] Built target document_util
+[ 33%] Built target vespa_hwaccelerated
+[ 37%] Built target searchlib+source
+[ 40%] Built target vespalib_vespalib_util
+[ 44%] Built target metrics_common
+[ 48%] Built target document_fieldvalues
+[ 48%] Built target document_select
+[ 51%] Built target document_updates
+[ 59%] Built target vespa_configdefinitions_object
+[ 59%] Built target vespalib
+[ 59%] Built target searchlib_sconfig
+[ 59%] Built target searchlib_bitcompression
+[ 59%] Built target vespa_metrics_object
+[ 59%] Built target searchlib_aggregation
+[ 59%] Built target searchlib_features_fieldmatch
+[ 59%] Built target searchlib_engine
+[ 59%] Built target searchlib_features_rankingexpression
+[ 59%] Built target searchlib_docstore
+[ 59%] Built target searchlib_common
+[ 59%] Built target searchlib_fef_test_plugin
+[ 59%] Built target searchlib_fef_test
+[ 59%] Built target searchlib_diskindex
+[ 59%] Built target searchlib_parsequery
+[ 59%] Built target searchlib_searchlib_index
+[ 62%] Built target searchlib_expression
+[ 62%] Built target searchlib_query
+[ 66%] Built target searchlib_fef
+[ 66%] Built target searchlib_predicate
+[ 66%] Built target searchlib_memoryindex
+[ 66%] Built target searchlib_queryeval_wand
+[ 66%] Built target searchlib_query_tree
+[ 70%] Built target searchlib_query_streaming
+[ 70%] Built target searchlib_uca
+[ 70%] Building CXX object searchlib/src/tests/attribute/sourceselector/CMakeFiles/searchlib_sourceselector_clone_benchmark_app_object.dir/sourceselector_clone_benchmark.cpp.o
+[ 70%] Built target searchcommon_searchcommon_attribute
+[ 70%] Built target vespa_fnet
+[ 70%] Built target vespaeval
+[ 70%] Built target searchcommon_searchcommon_common
+[ 70%] Built target searchlib_transactionlog
+[ 70%] Built target searchlib_util
+[ 70%] Built target vespa_config
+[ 70%] Built target vespa_configdefinitions
+[ 70%] Built target vespa_metrics
+[ 70%] Built target vespa_document
+[ 70%] Building CXX object searchlib/src/vespa/searchlib/features/CMakeFiles/searchlib_features.dir/attributefeature.cpp.o
+[ 74%] Built target searchlib_tensor
+[ 74%] Building CXX object searchlib/src/vespa/searchlib/queryeval/CMakeFiles/searchlib_queryeval.dir/intermediate_blueprints.cpp.o
+[ 74%] Building CXX object searchlib/src/vespa/searchlib/queryeval/CMakeFiles/searchlib_queryeval.dir/isourceselector.cpp.o
+[ 74%] Building CXX object searchlib/src/vespa/searchlib/queryeval/CMakeFiles/searchlib_queryeval.dir/sourceblendersearch.cpp.o
+[ 81%] Built target searchlib_features
+[ 88%] Built target searchlib_queryeval
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/attribute_operation.cpp.o
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/createsinglestd.cpp.o
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/diversity.cpp.o
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/fixedsourceselector.cpp.o
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/singlenumericattribute.cpp.o
+[ 88%] Building CXX object searchlib/src/vespa/searchlib/attribute/CMakeFiles/searchlib_attribute.dir/sourceselector.cpp.o
+[100%] Built target searchlib_attribute
+[100%] Linking CXX shared library libvespa_searchlib.so
+[100%] Built target searchlib_sourceselector_clone_benchmark_app_object
+[100%] Built target vespa_searchlib
+[100%] Linking CXX executable searchlib_sourceselector_clone_benchmark_app
+[100%] Built target searchlib_sourceselector_clone_benchmark_app

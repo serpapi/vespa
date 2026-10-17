@@ -1,0 +1,56 @@
+[==========] Running 14 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 14 tests from SourceSelectorTest
+[ RUN      ] SourceSelectorTest.test_fixed
+[       OK ] SourceSelectorTest.test_fixed (1 ms)
+[ RUN      ] SourceSelectorTest.require_that_selector_can_clone_and_subtract
+[       OK ] SourceSelectorTest.require_that_selector_can_clone_and_subtract (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_selector_can_save_and_Load
+1792232866.883299	localhost	45299/18365	-	.searchlib.attribute.fixed_source_selector	warning	2 sources capped in source selector test_data/sourcelist
+1792232866.883672	localhost	45299/18365	-	.searchlib.attribute.fixed_source_selector	warning	2 sources capped in source selector test_data/sourcelist
+[       OK ] SourceSelectorTest.require_that_selector_can_save_and_Load (1 ms)
+[ RUN      ] SourceSelectorTest.require_that_complete_source_range_is_handled
+[       OK ] SourceSelectorTest.require_that_complete_source_range_is_handled (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_sources_are_counted_correctly
+[       OK ] SourceSelectorTest.require_that_sources_are_counted_correctly (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_doc_id_limit_is_correct
+[       OK ] SourceSelectorTest.require_that_doc_id_limit_is_correct (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_correct_default_value_is_used_after_compaction
+[       OK ] SourceSelectorTest.require_that_correct_default_value_is_used_after_compaction (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_constructor_initializes_every_doc_to_default_source
+[       OK ] SourceSelectorTest.require_that_constructor_initializes_every_doc_to_default_source (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_clone_and_subtract_maps_every_source_byte
+[       OK ] SourceSelectorTest.require_that_clone_and_subtract_maps_every_source_byte (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_clone_and_subtract_copies_lids_above_compacted_limit
+[       OK ] SourceSelectorTest.require_that_clone_and_subtract_copies_lids_above_compacted_limit (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_empty_selector_can_be_cloned
+[       OK ] SourceSelectorTest.require_that_empty_selector_can_be_cloned (0 ms)
+[ RUN      ] SourceSelectorTest.require_that_clone_and_subtract_rejects_new_sources_at_or_above_limit
+[       OK ] SourceSelectorTest.require_that_clone_and_subtract_rejects_new_sources_at_or_above_limit (1 ms)
+[ RUN      ] SourceSelectorTest.require_that_generation_count_does_not_depend_on_lid_count
+/work/src/vespa/searchlib/src/tests/attribute/sourceselector/sourceselector_test.cpp:348: Failure
+Expected equality of these values:
+  constructed[0]
+    Which is: 19
+  constructed[1]
+    Which is: 20
+
+/work/src/vespa/searchlib/src/tests/attribute/sourceselector/sourceselector_test.cpp:349: Failure
+Expected equality of these values:
+  cloned[0]
+    Which is: 20
+  cloned[1]
+    Which is: 21
+
+[  FAILED  ] SourceSelectorTest.require_that_generation_count_does_not_depend_on_lid_count (58 ms)
+[ RUN      ] SourceSelectorTest.require_that_clone_and_subtract_leaves_room_to_grow
+[       OK ] SourceSelectorTest.require_that_clone_and_subtract_leaves_room_to_grow (13 ms)
+[----------] 14 tests from SourceSelectorTest (75 ms total)
+
+[----------] Global test environment tear-down
+[==========] 14 tests from 1 test suite ran. (75 ms total)
+[  PASSED  ] 13 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] SourceSelectorTest.require_that_generation_count_does_not_depend_on_lid_count
+
+ 1 FAILED TEST

@@ -1,0 +1,68 @@
+-- Vespa build platform is almalinux 8.10
+-- The CXX compiler identification is GNU 15.2.1
+-- The C compiler identification is GNU 15.2.1
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /opt/rh/gcc-toolset-15/root/usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /opt/rh/gcc-toolset-15/root/usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Setting VESPA_UNPRIVILEGED to yes
+-- Setting CMAKE_INSTALL_PREFIX to /root/vespa
+-- Setting VESPA_USER to root
+-- Setting VESPA_GROUP to root
+-- Setting VESPA_DEPS_PREFIX to /opt/vespa-deps
+-- DEFAULT_CMAKE_PREFIX_PATH is /opt/vespa-deps
+-- Setting CMAKE_PREFIX_PATH to /opt/vespa-deps
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - found
+-- Found Threads: TRUE
+-- Performing Test HAVE_FFI_CALL
+-- Performing Test HAVE_FFI_CALL - Success
+-- Found FFI: /usr/lib64/libffi.so
+-- Found ZLIB: /usr/lib64/libz.so (found version "1.2.11")
+-- Found zstd: /opt/vespa-deps/lib64/libzstd.so
+-- Found LibXml2: /usr/lib64/libxml2.so (found version "2.9.7")
+-- Found LLVM 21.1.8
+-- Using LLVMConfig.cmake in: /usr/lib64/cmake/llvm
+-- LLVM_INCLUDE_DIRS is /usr/include
+-- LLVM_LIBRARY_DIRS is /usr/lib64
+-- LLVM_INCLUDE_DIR is /usr/include
+-- LLVM_MAIN_INCLUDE_DIR is /usr/include
+-- LLVM_LIBRARY_DIR is /usr/lib64
+-- Setting up default build settings for for almalinux 8.10
+-- CMAKE_SYSTEM_PROCESSOR = aarch64
+-- DEFAULT_EXTRA_LINK_DIRECTORY is /opt/vespa-deps/lib64
+-- DEFAULT_EXTRA_INCLUDE_DIRECTORY is /opt/vespa-deps/include
+-- DEFAULT_VESPA_LLVM_VERSION is 21
+-- DEFAULT_VESPA_CPU_ARCH_FLAGS is -march=armv8.2-a+dotprod+crypto -mtune=neoverse-n1
+-- Setting EXTRA_INCLUDE_DIRECTORY to /opt/vespa-deps/include
+-- Setting EXTRA_LINK_DIRECTORY to /opt/vespa-deps/lib64
+-- Setting CMAKE_INSTALL_RPATH to /root/vespa/lib64;/opt/vespa-deps/lib64
+-- Setting VESPA_LLVM_VERSION to 21
+-- Setting VESPA_CPU_ARCH_FLAGS to -march=armv8.2-a+dotprod+crypto -mtune=neoverse-n1
+-- Found GTest: /opt/vespa-deps/lib64/cmake/GTest/GTestConfig.cmake (found version "1.16.0")
+-- liburing not found
+-- CMAKE_SHARED_LINKER_FLAGS is  -Wl,--build-id -latomic -ldl -Wl,-E
+-- Using ccache /usr/bin/ccache
+-- VESPA_VERSION is 8.0.0
+-- Found BISON: /usr/bin/bison (found version "3.0.4")
+-- Found FLEX: /usr/bin/flex (found version "2.6.1")
+-- Found Protobuf: /opt/vespa-deps/lib64/libprotobuf.so;-lpthread (found version "7.34.1")
+-- Looking for sgemm_
+-- Looking for sgemm_ - found
+-- Found BLAS: /opt/vespa-deps/lib64/libopenblas.so
+-- Found ICU: /opt/vespa-deps/include (found suitable version "78.3", minimum required is "60.0") found components: uc i18n
+-- Found OpenSSL: /opt/vespa-deps/lib64/libcrypto.so (found version "3.5.9")
+-- Found RE2: /opt/vespa-deps/lib64/libre2.so
+-- Configuring done (1.1s)
+-- Generating done (4.2s)
+-- Build files have been written to: /work/build

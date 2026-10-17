@@ -1,0 +1,23 @@
+Test project /work/build
+    Start 342: searchlib_attribute_test_app
+    Start 285: searchcore_indexmanager_test_app
+    Start 286: searchcore_fusionrunner_test_app
+    Start 287: searchcore_diskindexcleaner_test_app
+    Start 520: searchlib_sourceblender_test_app
+    Start 288: searchcore_indexcollection_test_app
+1/9 Test #288: searchcore_indexcollection_test_app ..............   Passed    0.03 sec
+    Start 380: searchlib_sourceselector_test_app
+2/9 Test #520: searchlib_sourceblender_test_app .................   Passed    0.24 sec
+    Start 359: searchlib_extendattribute_test_app
+3/9 Test #359: searchlib_extendattribute_test_app ...............   Passed    0.02 sec
+    Start 517: searchlib_queryeval_profiled_iterator_test_app
+4/9 Test #287: searchcore_diskindexcleaner_test_app .............   Passed    0.27 sec
+5/9 Test #380: searchlib_sourceselector_test_app ................   Passed    0.04 sec
+6/9 Test #517: searchlib_queryeval_profiled_iterator_test_app ...   Passed    0.02 sec
+7/9 Test #286: searchcore_fusionrunner_test_app .................   Passed    0.31 sec
+8/9 Test #342: searchlib_attribute_test_app .....................   Passed    1.17 sec
+9/9 Test #285: searchcore_indexmanager_test_app .................   Passed    2.71 sec
+
+100% tests passed, 0 tests failed out of 9
+
+Total Test time (real) =   2.73 sec

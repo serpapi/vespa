@@ -1,0 +1,11 @@
+# start 2026-10-17T10:35:01Z N=1 DOCS=590000000 nproc=12 loadavg=0.97 1.43 1.69 1/239 87497
+rep=1 variant=A phase=clone n=590000000 diff=1 wall_s=4.717059 ns_per_lid=7.9950 minflt=1312 majflt=0 rss_before_kb=652564 hwm_after_kb=1516404 hwm_reset=1 gen=33 bytes=bfc19397151919d7 lib=/work/variants/A/libvespa_searchlib.so
+rep=1 variant=B phase=clone n=590000000 diff=1 wall_s=1.439849 ns_per_lid=2.4404 minflt=282 majflt=0 rss_before_kb=652464 hwm_after_kb=1230000 hwm_reset=1 gen=3 bytes=bfc19397151919d7 lib=/work/variants/B/libvespa_searchlib.so
+rep=1 variant=C0 phase=clone n=590000000 diff=1 wall_s=0.996947 ns_per_lid=1.6897 minflt=282 majflt=0 rss_before_kb=652624 hwm_after_kb=1230160 hwm_reset=1 gen=2 bytes=bfc19397151919d7 lib=/work/variants/C0/libvespa_searchlib.so
+rep=1 variant=C phase=clone n=590000000 diff=1 wall_s=0.025627 ns_per_lid=0.0434 minflt=282 majflt=0 rss_before_kb=652480 hwm_after_kb=1230016 hwm_reset=1 gen=2 bytes=bfc19397151919d7 lib=/work/variants/C/libvespa_searchlib.so
+rep=1 variant=A phase=ctor n=590000000 diff=1 wall_s=3.206376 ns_per_lid=5.4345 minflt=1312 majflt=0 rss_before_kb=652608 hwm_after_kb=1516448 hwm_reset=1 gen=32 bytes=ba716a09f0aefab7 lib=/work/variants/A/libvespa_searchlib.so
+rep=1 variant=B phase=ctor n=590000000 diff=1 wall_s=0.010446 ns_per_lid=0.0177 minflt=282 majflt=0 rss_before_kb=652592 hwm_after_kb=1230128 hwm_reset=1 gen=2 bytes=ba716a09f0aefab7 lib=/work/variants/B/libvespa_searchlib.so
+rep=1 variant=C0 phase=ctor n=590000000 diff=1 wall_s=0.010538 ns_per_lid=0.0179 minflt=282 majflt=0 rss_before_kb=652336 hwm_after_kb=1229872 hwm_reset=1 gen=2 bytes=ba716a09f0aefab7 lib=/work/variants/C0/libvespa_searchlib.so
+rep=1 variant=C phase=ctor n=590000000 diff=1 wall_s=0.011263 ns_per_lid=0.0191 minflt=282 majflt=0 rss_before_kb=652468 hwm_after_kb=1230004 hwm_reset=1 gen=2 bytes=ba716a09f0aefab7 lib=/work/variants/C/libvespa_searchlib.so
+rep=1 variant=A phase=grow n=590000000 diff=1 wall_s=2.993218 ns_per_lid=5.0733 minflt=1312 majflt=0 rss_before_kb=652728 hwm_after_kb=1516568 hwm_reset=1 gen=31 bytes=0000000000000000 lib=/work/variants/A/libvespa_searchlib.so
+# end 2026-10-17T10:35:38Z loadavg=0.99 1.37 1.66 1/237 87548

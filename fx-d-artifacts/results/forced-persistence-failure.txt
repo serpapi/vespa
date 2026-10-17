@@ -1,0 +1,2 @@
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Fatal: Writing 524288 bytes to 'clone_bench_data/selector.dat' failed (wrote 520192): short write

@@ -1,0 +1,333 @@
+diff --git a/searchlib/src/tests/attribute/sourceselector/.gitignore b/searchlib/src/tests/attribute/sourceselector/.gitignore
+index 265c856fd01..99d2b5d8cce 100644
+--- a/searchlib/src/tests/attribute/sourceselector/.gitignore
++++ b/searchlib/src/tests/attribute/sourceselector/.gitignore
+@@ -2,3 +2,4 @@
+ Makefile
+ sourceselector_test
+ searchlib_sourceselector_test_app
++searchlib_sourceselector_clone_benchmark_app
+diff --git a/searchlib/src/tests/attribute/sourceselector/CMakeLists.txt b/searchlib/src/tests/attribute/sourceselector/CMakeLists.txt
+index 50cd465371a..a9581c1c881 100644
+--- a/searchlib/src/tests/attribute/sourceselector/CMakeLists.txt
++++ b/searchlib/src/tests/attribute/sourceselector/CMakeLists.txt
+@@ -7,3 +7,9 @@ vespa_add_executable(searchlib_sourceselector_test_app TEST
+     GTest::gtest
+ )
+ vespa_add_test(NAME searchlib_sourceselector_test_app COMMAND searchlib_sourceselector_test_app)
++vespa_add_executable(searchlib_sourceselector_clone_benchmark_app
++    SOURCES
++    sourceselector_clone_benchmark.cpp
++    DEPENDS
++    vespa_searchlib
++)
+diff --git a/searchlib/src/tests/attribute/sourceselector/sourceselector_clone_benchmark.cpp b/searchlib/src/tests/attribute/sourceselector/sourceselector_clone_benchmark.cpp
+new file mode 100644
+index 00000000000..2b119706ff7
+--- /dev/null
++++ b/searchlib/src/tests/attribute/sourceselector/sourceselector_clone_benchmark.cpp
+@@ -0,0 +1,304 @@
++// Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
++// Dumps source selector state digests for comparing builds, and times FixedSourceSelector::cloneAndSubtract().
++// Uses only APIs that exist before init_docs(), so the same file builds against older searchlib.
++
++#include <vespa/searchlib/attribute/fixedsourceselector.h>
++#include <vespa/searchlib/common/tunefileinfo.h>
++#include <vespa/searchlib/index/dummyfileheadercontext.h>
++#include <vespa/searchlib/util/file_settings.h>
++#include <vespa/searchcommon/attribute/config.h>
++#include <vespa/vespalib/data/fileheader.h>
++#include <vespa/vespalib/util/alloc.h>
++#include <vespa/fastos/file.h>
++#include <chrono>
++#include <cinttypes>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <dlfcn.h>
++#include <filesystem>
++#include <fstream>
++#include <limits>
++#include <string>
++#include <sys/resource.h>
++#include <vector>
++
++using namespace search;
++using search::index::DummyFileHeaderContext;
++using SourceStore = queryeval::sourceselector::Iterator::SourceStore;
++
++namespace {
++
++struct SelectorPeek : public FixedSourceSelector {
++    static SourceStore &store(FixedSourceSelector &selector) {
++        return static_cast<SourceStore &>(*(selector.*(&SelectorPeek::_realSource)));
++    }
++};
++
++constexpr queryeval::Source default_source = 7;
++const std::string dir = "clone_bench_data";
++bool persistence_failed = false;
++
++std::string failed(const char *what) {
++    persistence_failed = true;
++    return std::string(what) + "=FAILED";
++}
++
++struct Fnv {
++    uint64_t h = 14695981039346656037ull;
++    void add(const void *data, size_t len) {
++        auto p = static_cast<const uint8_t *>(data);
++        for (size_t i = 0; i < len; ++i) {
++            h = (h ^ p[i]) * 1099511628211ull;
++        }
++    }
++    template <typename T> void add_value(T v) { add(&v, sizeof(v)); }
++};
++
++struct Rng {
++    uint64_t s;
++    explicit Rng(uint64_t seed) : s(seed) {}
++    uint64_t next() { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; }
++};
++
++uint64_t hash_bytes(FixedSourceSelector &selector) {
++    SourceStore &store = SelectorPeek::store(selector);
++    Fnv f;
++    uint32_t num_docs = store.getNumDocs();
++    f.add_value(num_docs);
++    for (uint32_t lid = 0; lid < num_docs; ++lid) {
++        f.add_value(static_cast<uint8_t>(store.getFast(lid)));
++    }
++    return f.h;
++}
++
++std::string state(FixedSourceSelector &selector) {
++    SourceStore &store = SelectorPeek::store(selector);
++    char buf[256];
++    snprintf(buf, sizeof(buf), "numDocs=%u committed=%u docIdLimit=%u default=%u baseId=%u bytes=%016" PRIx64,
++             store.getNumDocs(), store.getCommittedDocIdLimit(), selector.getDocIdLimit(),
++             (unsigned) selector.getDefaultSource(), selector.getBaseId(), hash_bytes(selector));
++    return buf;
++}
++
++// The uncommitted docid limit has no getter: a commit() raises the committed limit to it if it is higher.
++std::string committed_after_commit(FixedSourceSelector &selector) {
++    SourceStore &store = SelectorPeek::store(selector);
++    store.commit();
++    return "committedAfterCommit=" + std::to_string(store.getCommittedDocIdLimit());
++}
++
++std::string extra(FixedSourceSelector &selector) {
++    SourceStore &store = SelectorPeek::store(selector);
++    store.commit(CommitParam::UpdateStats::FORCE);
++    char buf[128];
++    snprintf(buf, sizeof(buf), "gen=%" PRIu64 " allocated=%" PRIu64,
++             store.getCurrentGeneration().value(), (uint64_t) store.getStatus().getAllocated());
++    return buf;
++}
++
++std::string save_and_reload(FixedSourceSelector &selector) {
++    std::filesystem::remove_all(dir);
++    std::filesystem::create_directory(dir);
++    const std::string base = dir + "/selector";
++    auto save_info = selector.extractSaveInfo(base);
++    if (!save_info->save(TuneFileAttributes(), DummyFileHeaderContext())) {
++        return failed("save");
++    }
++    vespalib::FileHeader header(FileSettings::DIRECTIO_ALIGNMENT);
++    FastOS_File file((base + ".dat").c_str());
++    if (!file.OpenReadOnly()) {
++        return failed("open");
++    }
++    size_t header_size = header.readFile(file);
++    if (!file.Close()) {
++        return failed("close");
++    }
++    std::ifstream in(base + ".dat", std::ios::binary);
++    in.seekg(header_size);
++    std::vector<char> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    if (!in || data.size() + header_size != std::filesystem::file_size(base + ".dat")) {
++        return failed("read");
++    }
++    Fnv f;
++    f.add(data.data(), data.size());
++    auto loaded = FixedSourceSelector::load(base, selector.getBaseId() + selector.getDefaultSource());
++    char buf[512];
++    snprintf(buf, sizeof(buf), "saved=%016" PRIx64 "/%zu hdr[default=%" PRId64 " baseId=%" PRId64 " docIdLimit=%" PRId64 "] reload{%s}",
++             f.h, data.size(),
++             header.hasTag("Default source") ? header.getTag("Default source").asInteger() : -1,
++             header.hasTag("Base id") ? header.getTag("Base id").asInteger() : -1,
++             header.hasTag("Doc id limit") ? header.getTag("Doc id limit").asInteger() : -1,
++             state(*loaded).c_str());
++    std::filesystem::remove_all(dir);
++    return buf;
++}
++
++std::unique_ptr<FixedSourceSelector> make_source(uint32_t num_docs, const std::string &pattern, uint64_t seed) {
++    if (pattern == "sentinel") {
++        auto selector = std::make_unique<FixedSourceSelector>(default_source, "src");
++        Rng rng(seed);
++        for (uint32_t lid = 0; lid + 2 < num_docs; ++lid) {
++            selector->setSource(lid, rng.next() % 8);
++        }
++        return selector;
++    }
++    if (num_docs == 0) {
++        return std::make_unique<FixedSourceSelector>(default_source, "src", std::numeric_limits<uint32_t>::max());
++    }
++    auto selector = std::make_unique<FixedSourceSelector>(default_source, "src", num_docs - 1);
++    SourceStore &store = SelectorPeek::store(*selector);
++    Rng rng(seed);
++    if (pattern == "default") {
++        return selector;
++    }
++    for (uint32_t lid = 0; lid < num_docs; ++lid) {
++        uint64_t r = rng.next();
++        uint8_t source = (pattern == "rand254") ? (r % 254) : (r % 8);
++        if (pattern == "undef" && (lid % 17) == 3) {
++            source = 0x80;
++        }
++        store.set(lid, static_cast<int8_t>(source));
++    }
++    store.commit();
++    if (pattern == "compacted" && num_docs > 2) {
++        selector->compactLidSpace((num_docs - 1) - (num_docs - 1) / 100 - 1);
++    }
++    return selector;
++}
++
++const char *loaded_library() {
++    Dl_info info;
++    if (dladdr(reinterpret_cast<void *>(&FixedSourceSelector::load), &info) && info.dli_fname != nullptr) {
++        return info.dli_fname;
++    }
++    return "unknown";
++}
++
++int dump(bool big) {
++    std::vector<uint32_t> sizes = {0, 1, 2, 63, 64, 65, 4095, 4096, 4097, 1000000};
++    std::vector<std::string> patterns = {"default", "rand8", "rand254", "undef", "compacted", "sentinel"};
++    std::vector<uint32_t> diffs = {1, 2, 7, 200, 253, 254, 255, 256, 1000};
++    if (big) {
++        sizes = {590000000};
++        patterns = {"rand8", "compacted"};
++        diffs = {1, 7};
++    }
++    size_t cases = 0;
++    for (uint32_t k : sizes) {
++        if (k == 0 || big) {
++            continue;
++        }
++        FixedSourceSelector selector(default_source, "ctor", k - 1);
++        printf("ctor k=%u %s %s | %s\n", k - 1, state(selector).c_str(), save_and_reload(selector).c_str(), extra(selector).c_str());
++        ++cases;
++    }
++    for (uint32_t num_docs : sizes) {
++        for (const auto &pattern : patterns) {
++            if (pattern == "sentinel" && num_docs > 1000000) {
++                continue;
++            }
++            auto source = make_source(num_docs, pattern, num_docs * 31 + pattern.size());
++            source->setBaseId(42);
++            printf("source n=%u %s %s\n", num_docs, pattern.c_str(), state(*source).c_str());
++            for (uint32_t diff : diffs) {
++                auto clone = source->cloneAndSubtract("clone", diff);
++                std::string cloned = state(*clone);
++                std::string saved = save_and_reload(*clone);
++                printf("clone n=%u %s diff=%u %s %s %s | %s\n", num_docs, pattern.c_str(), diff, cloned.c_str(),
++                       saved.c_str(), committed_after_commit(*clone).c_str(), extra(*clone).c_str());
++                fflush(stdout);
++                ++cases;
++            }
++        }
++    }
++    printf("cases=%zu persistence_failed=%d\n", cases, persistence_failed ? 1 : 0);
++    return (cases > 0 && !persistence_failed) ? 0 : 1;
++}
++
++long read_status_kb(const char *key) {
++    FILE *f = fopen("/proc/self/status", "r");
++    if (f == nullptr) {
++        return -1;
++    }
++    char line[256];
++    long value = -1;
++    size_t key_len = strlen(key);
++    while (fgets(line, sizeof(line), f) != nullptr) {
++        if (strncmp(line, key, key_len) == 0) {
++            value = strtol(line + key_len, nullptr, 10);
++        }
++    }
++    fclose(f);
++    return value;
++}
++
++bool reset_peak_rss() {
++    FILE *f = fopen("/proc/self/clear_refs", "w");
++    if (f == nullptr) {
++        return false;
++    }
++    bool ok = fputs("5", f) >= 0;
++    return (fclose(f) == 0) && ok;
++}
++
++int bench(const std::string &phase, uint32_t num_docs, uint32_t diff) {
++    auto source = make_source(num_docs, "compacted", 42);
++    source->setBaseId(42);
++    vespalib::alloc::Alloc copy_from;
++    vespalib::alloc::Alloc copy_to;
++    if (phase == "memcpy") {
++        copy_from = vespalib::alloc::Alloc::alloc(num_docs);
++        memset(copy_from.get(), 3, num_docs);
++    }
++    bool hwm_reset = reset_peak_rss();
++    long rss_before = read_status_kb("VmRSS:");
++    rusage ru0{}, ru1{};
++    getrusage(RUSAGE_SELF, &ru0);
++    auto t0 = std::chrono::steady_clock::now();
++    std::unique_ptr<FixedSourceSelector> result;
++    std::shared_ptr<SourceStore> grown;
++    if (phase == "clone") {
++        result = source->cloneAndSubtract("clone", diff);
++    } else if (phase == "ctor") {
++        result = std::make_unique<FixedSourceSelector>(default_source - 1, "ctor", num_docs - 1);
++    } else if (phase == "grow") {
++        grown = std::make_shared<SourceStore>("grow", attribute::Config(attribute::BasicType::INT8));
++        uint32_t doc = 0;
++        for (uint32_t i = 0; i < num_docs; ++i) {
++            grown->addDoc(doc);
++        }
++    } else if (phase == "memcpy") {
++        copy_to = vespalib::alloc::Alloc::alloc(num_docs);
++        memcpy(copy_to.get(), copy_from.get(), num_docs);
++    } else {
++        fprintf(stderr, "unknown phase %s\n", phase.c_str());
++        return 1;
++    }
++    auto t1 = std::chrono::steady_clock::now();
++    getrusage(RUSAGE_SELF, &ru1);
++    long hwm_after = read_status_kb("VmHWM:");
++    double seconds = std::chrono::duration<double>(t1 - t0).count();
++    uint64_t check = result ? hash_bytes(*result) : 0;
++    uint64_t gen = result ? SelectorPeek::store(*result).getCurrentGeneration().value() : (grown ? grown->getCurrentGeneration().value() : 0);
++    printf("phase=%s n=%u diff=%u wall_s=%.6f ns_per_lid=%.4f minflt=%ld majflt=%ld rss_before_kb=%ld hwm_after_kb=%ld hwm_reset=%d gen=%" PRIu64 " bytes=%016" PRIx64 " lib=%s\n",
++           phase.c_str(), num_docs, diff, seconds, seconds * 1e9 / num_docs, ru1.ru_minflt - ru0.ru_minflt,
++           ru1.ru_majflt - ru0.ru_majflt, rss_before, hwm_after, hwm_reset ? 1 : 0, gen, check, loaded_library());
++    return 0;
++}
++
++}  // namespace
++
++int main(int argc, char **argv) {
++    DummyFileHeaderContext::setCreator("sourceselector_clone_benchmark");
++    std::string mode = (argc > 1) ? argv[1] : "";
++    if (mode == "dump") {
++        return dump(argc > 2 && std::string(argv[2]) == "big");
++    }
++    if (mode == "bench" && argc > 3) {
++        uint32_t diff = (argc > 4) ? strtoul(argv[4], nullptr, 10) : 1;
++        return bench(argv[2], strtoul(argv[3], nullptr, 10), diff);
++    }
++    fprintf(stderr, "usage: %s dump [big] | bench clone|ctor|grow|memcpy <num_docs> [diff]\n", argv[0]);
++    return 2;
++}

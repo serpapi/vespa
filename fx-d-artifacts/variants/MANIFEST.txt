@@ -1,0 +1,17 @@
+Every source tree is base 8ec58e1230 (tree = v8.679.50 for all touched dirs) + the patches listed.
+Library hashes are libvespa_searchlib.so built in the chroot (GCC 15.2.1, Vespa default flags); the A build
+was repeated and gave the same hash, so builds are deterministic here.
+
+library  patches                                  libvespa_searchlib.so sha256
+A        (none)                                    da5b4a5ea062e4fd7949ee1f6da2d8febfd3c140233c352b6d05d922952c32d5
+B        B.patch                                   89ea9a1ce45c13907ae7b0b08a75878490d8c8dd756cdfa5952691a1becefcc9
+C0       B.patch + C0-scalar-remap.patch           a931ba816087cd7b756bd0027aa280d5a5106486db82b1fb5105a6b1a27bb157
+C        B.patch + C.patch  (= branch ddd975bf17 + 9375939a23)  7a6f9c80e8d195193212cab637d654ffe41e46ed42cb67649f16bd22838afad7
+
+benchmark program                 patch                         binary sha256 (see results/sha256-bench-binaries.txt)
+main runs (bench-2026*T1035*, T1036*, thp-never), dump-*/d-*   bench-main-runs.patch   A 4fb8729f…, B/C0/C d4f79ef0…
+memcpy run (bench-memcpy-*)       bench2-memcpy.patch           bfccb172…
+dump3-*                           bench3-persistence-fix.patch  951f1ba2…
+dump4-*                           bench4-final.patch (= branch) 89f2e9e2…
+
+Each benchmark line prints lib=<path> of the library it loaded; each dump file name carries its library letter.
