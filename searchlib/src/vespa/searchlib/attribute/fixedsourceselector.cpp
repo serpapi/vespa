@@ -28,6 +28,25 @@ capSelector(queryeval::sourceselector::Iterator::SourceStore &store, queryeval::
     return cappedSources;
 }
 
+// Same as SourceSelector::getNewSource() for every byte, written so that the compiler vectorises it;
+// returns the largest new source.
+queryeval::Source
+subtractSources(std::span<const int8_t> sources, std::span<int8_t> result, uint32_t diff) noexcept
+{
+    const auto clampedDiff = static_cast<uint8_t>(std::min(diff, 255u));
+    const auto * __restrict src = reinterpret_cast<const uint8_t *>(sources.data());
+    auto * __restrict dst = reinterpret_cast<uint8_t *>(result.data());
+    const size_t numDocs = sources.size();
+    uint8_t maxSource = 0;
+    for (size_t docId = 0; docId < numDocs; ++docId) {
+        uint8_t source = src[docId];
+        uint8_t newSource = source - std::min(source, clampedDiff);
+        dst[docId] = newSource;
+        maxSource = std::max(maxSource, newSource);
+    }
+    return maxSource;
+}
+
 }
 
 FixedSourceSelector::Iterator::Iterator(const FixedSourceSelector & sourceSelector) :
@@ -56,13 +75,14 @@ FixedSourceSelector::UP
 FixedSourceSelector::cloneAndSubtract(const std::string & attrBaseFileName, uint32_t diff)
 {
     queryeval::Source newDefault = getNewSource(getDefaultSource(), diff);
-    auto selector = std::make_unique< FixedSourceSelector>(newDefault, attrBaseFileName, _source.getNumDocs()-1);
-    for (uint32_t docId = 0; docId < _source.getNumDocs(); ++docId) {
-        queryeval::Source src = _source.get(docId);
-        src = getNewSource(src, diff);
-        assert(src < SOURCE_LIMIT);
-        selector->_source.set(docId, src);
-    }
+    auto selector = std::make_unique< FixedSourceSelector>(newDefault, attrBaseFileName, std::numeric_limits<uint32_t>::max());
+    std::span<const int8_t> sources = _source.get_values_for_writer();
+    queryeval::Source maxSource = 0;
+    selector->_source.init_docs(sources.size(), [sources, diff, &maxSource](std::span<int8_t> values) noexcept {
+        maxSource = subtractSources(sources, values, diff);
+    });
+    assert(maxSource < SOURCE_LIMIT);
+    (void) maxSource;
     selector->_source.commit();
     selector->setBaseId(getBaseId() + diff);
     selector->_source.setCommittedDocIdLimit(_source.getCommittedDocIdLimit());
