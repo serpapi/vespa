@@ -14,6 +14,8 @@
 
 #include "legacy_strict_source_blender.h"
 
+#include <vespa/check_require.h>
+
 #include <vespa/searchcommon/common/schema.h>
 #include <vespa/searchlib/attribute/fixedsourceselector.h>
 #include <vespa/searchlib/common/tunefileinfo.h>
@@ -31,7 +33,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <cassert>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -277,10 +278,10 @@ public:
         tune_file_search._read.setWantMemoryMap();
         _index = std::make_unique<DiskIndex>(dir, std::shared_ptr<search::diskindex::IPostingListCache>());
         bool ok = _index->setup(tune_file_search);
-        assert(ok);
+        CHECK(ok);
         const auto& field_index = _index->get_field_index(0);
         _lookup = field_index.lookup("apple");
-        assert(_lookup.valid() && _lookup.counts._numDocs == _postings.size());
+        CHECK(_lookup.valid() && _lookup.counts._numDocs == _postings.size());
         _handle = field_index.read_posting_list(_lookup);
     }
 

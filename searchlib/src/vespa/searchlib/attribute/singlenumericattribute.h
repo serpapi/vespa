@@ -9,8 +9,9 @@
 #include <vespa/vespalib/util/atomic.h>
 #include <vespa/vespalib/util/type_stable_vector.h>
 
+#include <vespa/check_require.h>
+
 #include <atomic>
-#include <cassert>
 #include <limits>
 #include <span>
 #include <type_traits>
@@ -80,7 +81,7 @@ public:
     template <typename Fill>
     void init_docs(uint32_t num_docs, Fill &&fill) {
         static_assert(std::is_nothrow_invocable_v<Fill &, std::span<T>>);
-        assert(B::getNumDocs() == 0 && B::getCommittedDocIdLimit() == 0);
+        CHECK(B::getNumDocs() == 0 && B::getCommittedDocIdLimit() == 0);
         if (num_docs == 0) {
             return;
         }

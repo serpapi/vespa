@@ -7,7 +7,7 @@
 #include <vespa/searchcommon/attribute/iattributevector.h>
 
 #include <algorithm>
-#include <cassert>
+#include <vespa/check_require.h>
 
 using search::attribute::CollectionType;
 using search::attribute::IAttributeVector;
@@ -46,7 +46,7 @@ void TensorFromEnumAttributeExecutor::LabelIdMap::grow() {
 }
 
 void TensorFromEnumAttributeExecutor::LabelIdMap::insert(EnumHandle handle, string_id label) {
-    assert(handle != 0);
+    CHECK(handle != 0);
     ++_size;
     if ((_size * 2) > _slots.size()) {
         grow();
