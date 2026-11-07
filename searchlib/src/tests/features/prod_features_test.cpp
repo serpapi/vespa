@@ -1366,11 +1366,11 @@ TEST_F(ProdFeaturesTest, test_dot_product) {
         }
         { // keys containing ':', the weight follows the last ':'
             dotproduct::wset::StringVector out;
-            WeightedSetParser::parse("{coffee:fr:2.5,  tea:de:-3,a:b:c:0.25,:x:4,::5}", out);
+            WeightedSetParser::parse("{foo:bar:2.5,  baz:qux:-3,a:b:c:0.25,:x:4,::5}", out);
             ASSERT_EQ(out.getVector().size(), 5u);
-            EXPECT_EQ(out.getVector()[0].first, "coffee:fr");
+            EXPECT_EQ(out.getVector()[0].first, "foo:bar");
             EXPECT_EQ(out.getVector()[0].second, 2.5);
-            EXPECT_EQ(out.getVector()[1].first, "tea:de");
+            EXPECT_EQ(out.getVector()[1].first, "baz:qux");
             EXPECT_EQ(out.getVector()[1].second, -3);
             EXPECT_EQ(out.getVector()[2].first, "a:b:c");
             EXPECT_EQ(out.getVector()[2].second, 0.25);
@@ -1381,11 +1381,11 @@ TEST_F(ProdFeaturesTest, test_dot_product) {
         }
         { // malformed items: no ':' is skipped, a missing or non-numeric weight gives 0
             dotproduct::wset::StringVector out;
-            WeightedSetParser::parse("{coffee,coffee:fr:,tea:de:x,:}", out);
+            WeightedSetParser::parse("{foo,foo:bar:,baz:qux:x,:}", out);
             ASSERT_EQ(out.getVector().size(), 3u);
-            EXPECT_EQ(out.getVector()[0].first, "coffee:fr");
+            EXPECT_EQ(out.getVector()[0].first, "foo:bar");
             EXPECT_EQ(out.getVector()[0].second, 0);
-            EXPECT_EQ(out.getVector()[1].first, "tea:de");
+            EXPECT_EQ(out.getVector()[1].first, "baz:qux");
             EXPECT_EQ(out.getVector()[1].second, 0);
             EXPECT_EQ(out.getVector()[2].first, "");
             EXPECT_EQ(out.getVector()[2].second, 0);
@@ -1468,12 +1468,12 @@ TEST_F(ProdFeaturesTest, test_dot_product) {
 TEST_F(ProdFeaturesTest, test_dot_product_with_colon_in_keys) {
     auto attr =
         AttributeBuilder("wscolon", AVC(AVBT::STRING, AVCT::WSET))
-            .fill_wset({{{"coffee:fr", 3}, {"tea:fr", 5}, {"x:y:z", 7}}, {{"coffee:de", 2}, {"coffee:fr", -1}}, {}})
+            .fill_wset({{{"foo:bar", 3}, {"baz:bar", 5}, {"x:y:z", 7}}, {{"foo:qux", 2}, {"foo:bar", -1}}, {}})
             .get();
     auto query_tensor = vespalib::eval::SimpleValue::from_spec(vespalib::eval::TensorSpec("tensor(k{})")
-                                                                   .add({{"k", "coffee:fr"}}, 2)
+                                                                   .add({{"k", "foo:bar"}}, 2)
                                                                    .add({{"k", "x:y:z"}}, -1.5)
-                                                                   .add({{"k", "tea:de"}}, 4));
+                                                                   .add({{"k", "baz:qux"}}, 4));
     vespalib::nbostream stream;
     vespalib::eval::encode_value(*query_tensor, stream);
 
@@ -1484,7 +1484,7 @@ TEST_F(ProdFeaturesTest, test_dot_product_with_colon_in_keys) {
     ft.getIndexEnv().getProperties().add("rankingExpression(dot).rankingScript",
                                          "reduce(tensorFromWeightedSet(attribute(wscolon),k)*query(q),sum)");
     indexproperties::type::QueryFeature::set(ft.getIndexEnv().getProperties(), "q", "tensor(k{})");
-    ft.getQueryEnv().getProperties().add("dotProduct.vector", "{coffee:fr:2,x:y:z:-1.5,tea:de:4}");
+    ft.getQueryEnv().getProperties().add("dotProduct.vector", "{foo:bar:2,x:y:z:-1.5,baz:qux:4}");
     ft.getQueryEnv().getProperties().add("dotProduct.single", "{x:y:z:2}");
     ft.getQueryEnv().getProperties().add("query(q)", std::string_view(stream.peek(), stream.size()));
     ASSERT_TRUE(ft.setup());
