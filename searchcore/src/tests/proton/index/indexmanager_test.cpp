@@ -17,6 +17,7 @@
 #include <vespa/searchlib/memoryindex/document_inverter.h>
 #include <vespa/searchlib/memoryindex/document_inverter_context.h>
 #include <vespa/searchlib/memoryindex/field_index_collection.h>
+#include <vespa/searchlib/diskindex/diskindex.h>
 #include <vespa/searchlib/memoryindex/field_inverter.h>
 #include <vespa/searchlib/queryeval/isourceselector.h>
 #include <vespa/searchlib/test/doc_builder.h>
@@ -33,6 +34,7 @@
 #include <vespa/vespalib/util/time.h>
 
 #include <filesystem>
+#include <map>
 #include <ostream>
 #include <set>
 #include <sstream>
@@ -558,6 +560,136 @@ TEST_F(IndexManagerTest, require_that_flush_triggers_fusion) {
     set<uint32_t> flush_ids = readDiskIds(index_dir, "flush");
     EXPECT_EQ(1u, flush_ids.size());
     EXPECT_EQ(6u, *flush_ids.begin());
+}
+
+uint32_t num_docs_with_word(const string& dir, const string& word) {
+    search::diskindex::DiskIndex disk_index(dir, {});
+    EXPECT_TRUE(disk_index.setup(search::TuneFileSearch()));
+    auto lookup = disk_index.get_field_index(0).lookup(word);
+    return lookup.valid() ? lookup.counts._numDocs : 0u;
+}
+
+std::set<string> index_dir_names() {
+    std::set<string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(index_dir)) {
+        if (entry.path().filename().string().starts_with("index.")) {
+            names.insert(entry.path().filename().string());
+        }
+    }
+    return names;
+}
+
+struct TieredFusionTest : public IndexManagerTest {
+    // Flush 1 and 2 fused into index.fusion.2, then docs 2..5 in flushes 3..6, and doc 2 again in flush 7.
+    void build_indexes() {
+        for (uint32_t i = 0; i < 2; ++i) {
+            addDocument(docid + i);
+            flushIndexManager();
+        }
+        FusionSpec base;
+        base.flush_ids = {1, 2};
+        _index_manager->getMaintainer().runFusion(base, std::make_shared<search::FlushToken>());
+        for (uint32_t i = 2; i < 6; ++i) {
+            addDocument(docid + i);
+            flushIndexManager();
+        }
+        addDocument(docid + 2);
+        flushIndexManager();
+    }
+    void merge_3_to_6() {
+        // runFusion() called directly does not update the maintainer's own fusion spec.
+        FusionSpec spec;
+        spec.last_fusion_id = 2;
+        spec.flush_ids = {3, 4, 5, 6, 7};
+        ASSERT_TRUE(_index_manager->getMaintainer().runIntermediateFusion(spec, {3, 4, 5, 6},
+                                                                         std::make_shared<search::FlushToken>()));
+    }
+    void expect_merged_state(const string& label) {
+        SCOPED_TRACE(label);
+        EXPECT_EQ((std::set<string>{"index.flush.6", "index.flush.7", "index.fusion.2"}), index_dir_names());
+        auto sources = get_source_collection();
+        EXPECT_EQ(4u, sources->getSourceCount()); // fused, intermediate 6, flush 7, memory index
+        EXPECT_EQ(0u, getSource(*sources, docid));
+        EXPECT_EQ(0u, getSource(*sources, docid + 1));
+        EXPECT_EQ(5u, getSource(*sources, docid + 2)); // flush 7
+        EXPECT_EQ(4u, getSource(*sources, docid + 3)); // intermediate 6
+        EXPECT_EQ(4u, getSource(*sources, docid + 5));
+        // The stale copy of doc 2 from flush 3 is not carried into the intermediate index.
+        EXPECT_EQ(3u, num_docs_with_word(index_dir + "/index.flush.6", "foo"));
+    }
+};
+
+TEST_F(TieredFusionTest, require_that_intermediate_fusion_merges_flushed_indexes_only) {
+    build_indexes();
+    merge_3_to_6();
+    expect_merged_state("after merge");
+    resetIndexManager();
+    FusionSpec spec = _index_manager->getMaintainer().getFusionSpec();
+    EXPECT_EQ(2u, spec.last_fusion_id);
+    EXPECT_EQ((std::vector<uint32_t>{6, 7}), spec.flush_ids);
+    // The merged_ids marker stays until the next full fusion; selectors saved before the merge may still name them.
+    EXPECT_EQ((std::map<uint32_t, uint32_t>{{3, 6}, {4, 6}, {5, 6}}), spec.merged_into);
+    expect_merged_state("after restart");
+}
+
+TEST_F(TieredFusionTest, require_that_full_fusion_after_intermediate_fusion_keeps_all_documents) {
+    build_indexes();
+    merge_3_to_6();
+    FusionSpec spec;
+    spec.last_fusion_id = 2;
+    spec.flush_ids = {6, 7};
+    spec.merged_into = {{3, 6}, {4, 6}, {5, 6}};
+    _index_manager->getMaintainer().runFusion(spec, std::make_shared<search::FlushToken>());
+    EXPECT_EQ((std::set<string>{"index.fusion.7"}), index_dir_names());
+    EXPECT_EQ(6u, num_docs_with_word(index_dir + "/index.fusion.7", "foo"));
+}
+
+TEST_F(TieredFusionTest, require_that_restart_completes_intermediate_fusion_interrupted_after_commit) {
+    build_indexes();
+    merge_3_to_6();
+    _index_manager.reset();
+    // As if the process died between the two renames: no index.flush.6, the old one renamed away.
+    std::filesystem::rename(index_dir + "/index.flush.6", index_dir + "/index.inter.6");
+    std::filesystem::create_directory(index_dir + "/index.dead.6");
+    resetIndexManager();
+    expect_merged_state("after recovery");
+}
+
+TEST_F(TieredFusionTest, require_that_restart_drops_intermediate_fusion_interrupted_before_commit) {
+    build_indexes();
+    std::filesystem::copy(index_dir + "/index.flush.6", index_dir + "/index.inter.6");
+    resetIndexManager();
+    EXPECT_EQ((std::set<string>{"index.flush.3", "index.flush.4", "index.flush.5", "index.flush.6", "index.flush.7",
+                                "index.fusion.2"}),
+              index_dir_names());
+    EXPECT_EQ(7u, get_source_collection()->getSourceCount());
+}
+
+TEST_F(TieredFusionTest, require_that_fusion_target_merges_flushed_indexes_when_tiered_fusion_is_enabled) {
+    setenv("VESPA_TIERED_FUSION", "1", 1);
+    setenv("VESPA_TIERED_FUSION_FANOUT", "4", 1);
+    setenv("VESPA_TIERED_FUSION_FULL_PERCENT", "100000", 1); // the test indexes are all about the same size
+    resetIndexManager();
+    for (uint32_t i = 0; i < 2; ++i) {
+        addDocument(docid + i);
+        flushIndexManager();
+    }
+    run_fusion(true); // no fused index yet: a full fusion builds it
+    EXPECT_EQ((std::set<string>{"index.fusion.2"}), index_dir_names());
+    for (uint32_t i = 2; i < 6; ++i) {
+        addDocument(docid + i);
+        flushIndexManager();
+    }
+    run_fusion(true); // four flushed indexes in the same size tier
+    EXPECT_EQ((std::set<string>{"index.flush.6", "index.fusion.2"}), index_dir_names());
+    EXPECT_EQ(3u, get_source_collection()->getSourceCount());
+    FusionSpec spec = _index_manager->getMaintainer().getFusionSpec();
+    EXPECT_EQ(2u, spec.last_fusion_id);
+    EXPECT_EQ((std::vector<uint32_t>{6}), spec.flush_ids);
+    EXPECT_EQ((std::map<uint32_t, uint32_t>{{3, 6}, {4, 6}, {5, 6}}), spec.merged_into);
+    unsetenv("VESPA_TIERED_FUSION");
+    unsetenv("VESPA_TIERED_FUSION_FANOUT");
+    unsetenv("VESPA_TIERED_FUSION_FULL_PERCENT");
 }
 
 TEST_F(IndexManagerTest, require_that_fusion_target_is_setUp) {

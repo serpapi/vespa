@@ -30,7 +30,12 @@
 #include <vespa/vespalib/util/lambdatask.h>
 #include <vespa/vespalib/util/time.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <sstream>
 
 #include <vespa/log/log.h>
@@ -95,7 +100,118 @@ uint64_t transient_memory_usage(uint64_t memory_used, uint64_t static_memory_foo
 
 SerialNum noSerialNumHigh = std::numeric_limits<SerialNum>::max();
 
+// Tiered fusion disk layout. An intermediate index over flush ids S is built in index.inter.<max(S)>,
+// holding a "merged_ids" file that lists S without max(S). It is committed by renaming
+// index.flush.<max(S)> to index.dead.<max(S)> and index.inter.<max(S)> to index.flush.<max(S)>, after which
+// the merged-away flush directories are deleted. Source selectors saved before the commit can still name
+// merged-away ids; they are remapped to max(S) when loaded (see merged_into).
+const string intermediate_dir_prefix = "index.inter.";
+const string dead_dir_prefix = "index.dead.";
+const string merged_ids_file_name = "merged_ids";
+
+bool has_serial_file(const fs::path& dir) {
+    return fs::exists(dir / "serial.dat");
+}
+
+std::vector<uint32_t> read_merged_ids(const fs::path& dir) {
+    std::vector<uint32_t> ids;
+    std::ifstream         in(dir / merged_ids_file_name);
+    uint32_t              id;
+    while (in >> id) {
+        ids.push_back(id);
+    }
+    return ids;
+}
+
+void sync_dir(const fs::path& dir) {
+    vespalib::File::sync(dir.string());
+}
+
+/*
+ * Finishes or rolls back an intermediate fusion that a crash interrupted, and deletes the flush directories
+ * that committed intermediates merged away. Runs before DiskIndexCleaner, which would treat the
+ * index.inter.* and index.dead.* directories as unknown.
+ */
+void recover_intermediate_fusions(const string& base_dir) {
+    const fs::path base(base_dir);
+    for (const auto& entry : fs::directory_iterator(base)) {
+        const string name = entry.path().filename().string();
+        if (name.starts_with(intermediate_dir_prefix)) {
+            const fs::path flush_dir = base / (IndexDiskLayout::FlushDirPrefix + name.substr(intermediate_dir_prefix.size()));
+            if (has_serial_file(entry.path()) && !fs::exists(flush_dir)) {
+                LOG(info, "Completing intermediate fusion '%s'", entry.path().c_str());
+                fs::rename(entry.path(), flush_dir);
+            } else {
+                LOG(info, "Removing incomplete intermediate fusion '%s'", entry.path().c_str());
+                fs::remove_all(entry.path());
+            }
+        }
+    }
+    for (const auto& entry : fs::directory_iterator(base)) {
+        const string name = entry.path().filename().string();
+        if (name.starts_with(dead_dir_prefix)) {
+            fs::remove_all(entry.path());
+        } else if (name.starts_with(IndexDiskLayout::FlushDirPrefix)) {
+            for (uint32_t merged_id : read_merged_ids(entry.path())) {
+                fs::remove_all(base / (IndexDiskLayout::FlushDirPrefix + std::to_string(merged_id)));
+            }
+        }
+    }
+    sync_dir(base);
+}
+
+std::map<uint32_t, uint32_t> read_merged_into(const string& base_dir, const FusionSpec& spec) {
+    std::map<uint32_t, uint32_t> merged_into;
+    for (uint32_t id : spec.flush_ids) {
+        for (uint32_t merged_id : read_merged_ids(fs::path(base_dir) / (IndexDiskLayout::FlushDirPrefix + std::to_string(id)))) {
+            merged_into[merged_id] = id;
+        }
+    }
+    return merged_into;
+}
+
+// Source selector translation table for merged_into, in ids relative to last_fusion_id.
+std::array<Source, 256> relative_merge_table(const std::map<uint32_t, uint32_t>& merged_into, uint32_t last_fusion_id) {
+    std::array<Source, 256> table;
+    for (uint32_t i = 0; i < table.size(); ++i) {
+        table[i] = static_cast<Source>(i);
+    }
+    for (auto [merged_id, into_id] : merged_into) {
+        if (merged_id > last_fusion_id && into_id - last_fusion_id < table.size()) {
+            table[merged_id - last_fusion_id] = static_cast<Source>(into_id - last_fusion_id);
+        }
+    }
+    return table;
+}
+
+uint64_t dir_size(const fs::path& dir) {
+    uint64_t        size = 0;
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(dir, ec)) {
+        if (entry.is_regular_file(ec)) {
+            size += entry.file_size(ec);
+        }
+    }
+    return size;
+}
+
+uint64_t env_or(const char* name, uint64_t fallback) {
+    const char* value = getenv(name);
+    return (value != nullptr && *value != '\0') ? std::stoull(value) : fallback;
+}
+
 } // namespace
+
+IndexMaintainer::TieredFusionConfig IndexMaintainer::TieredFusionConfig::from_env() {
+    TieredFusionConfig config;
+    config.enabled = env_or("VESPA_TIERED_FUSION", 0) != 0;
+    config.fanout = std::max<uint64_t>(2, env_or("VESPA_TIERED_FUSION_FANOUT", config.fanout));
+    config.full_ratio = env_or("VESPA_TIERED_FUSION_FULL_PERCENT", 25) / 100.0;
+    config.max_relative_id = std::min<uint64_t>(env_or("VESPA_TIERED_FUSION_MAX_RELATIVE_ID", config.max_relative_id),
+                                                ISourceSelector::SOURCE_LIMIT - 10);
+    config.floor_bytes = env_or("VESPA_TIERED_FUSION_FLOOR_BYTES", config.floor_bytes);
+    return config;
+}
 
 IndexMaintainer::FrozenMemoryIndexRef::~FrozenMemoryIndexRef() = default;
 
@@ -716,11 +832,14 @@ IndexMaintainer::IndexMaintainer(const IndexMaintainerConfig& config, const Inde
       _schemaUpdateLock(),
       _tuneFileAttributes(config.getTuneFileAttributes()),
       _ctx(ctx),
-      _operations(operations) {
+      _operations(operations),
+      _tiered(TieredFusionConfig::from_env()) {
     // Called by document db init executor thread
     _changeGens.bumpPruneGen();
+    recover_intermediate_fusions(_base_dir);
     DiskIndexCleaner::clean(_base_dir, *_disk_indexes);
     FusionSpec spec = IndexReadUtilities::readFusionSpec(_base_dir);
+    spec.merged_into = read_merged_into(_base_dir, spec);
     _next_id = 1 + (spec.flush_ids.empty() ? spec.last_fusion_id : spec.flush_ids.back());
     _last_fusion_id = spec.last_fusion_id;
 
@@ -744,6 +863,10 @@ IndexMaintainer::IndexMaintainer(const IndexMaintainerConfig& config, const Inde
         ost << "sourceselector_fusion(" << _last_fusion_id << ")";
         _selector = getSourceSelector().cloneAndSubtract(ost.str(), id_diff);
         CHECK(_last_fusion_id == _selector->getBaseId());
+    }
+    if (!spec.merged_into.empty()) {
+        // The newest saved selector may predate an intermediate fusion that merged away some of its ids.
+        static_cast<FixedSourceSelector&>(*_selector).remapSources(relative_merge_table(spec.merged_into, _last_fusion_id));
     }
     set_id_for_new_memory_index();
     _selector->setDefaultSource(_current_index_id);
@@ -818,14 +941,48 @@ string IndexMaintainer::doFusion(SerialNum serialNum, std::shared_ptr<search::IF
         set_current_serial_num(std::max(current_serial_num(), serialNum));
     }
 
-    FusionSpec spec;
+    FusionSpec            spec;
+    std::vector<uint32_t> intermediate_ids;
     {
         LockGuard guard(_fusion_lock);
         if (!canRunFusion(_fusion_spec)) {
             return "";
         }
         spec = _fusion_spec;
-        _fusion_spec.flush_ids.clear();
+        if (_tiered.enabled) {
+            intermediate_ids = choose_intermediate_ids(spec);
+        }
+        if (intermediate_ids.empty()) {
+            _fusion_spec.flush_ids.clear();
+        } else {
+            std::erase_if(_fusion_spec.flush_ids, [&](uint32_t id) {
+                return std::find(intermediate_ids.begin(), intermediate_ids.end(), id) != intermediate_ids.end();
+            });
+        }
+    }
+
+    if (!intermediate_ids.empty()) {
+        bool      ok = runIntermediateFusion(spec, intermediate_ids, flush_token);
+        LockGuard lock(_fusion_lock);
+        auto&     flush_ids = _fusion_spec.flush_ids;
+        if (ok) {
+            const uint32_t into_id = intermediate_ids.back();
+            flush_ids.push_back(into_id);
+            for (uint32_t id : intermediate_ids) {
+                if (id != into_id) {
+                    _fusion_spec.merged_into[id] = into_id;
+                }
+            }
+            for (auto& entry : _fusion_spec.merged_into) {
+                if (std::find(intermediate_ids.begin(), intermediate_ids.end() - 1, entry.second) != intermediate_ids.end() - 1) {
+                    entry.second = into_id;
+                }
+            }
+        } else {
+            flush_ids.insert(flush_ids.end(), intermediate_ids.begin(), intermediate_ids.end());
+        }
+        std::sort(flush_ids.begin(), flush_ids.end());
+        return ok ? getFlushDir(intermediate_ids.back()) : "";
     }
 
     uint32_t new_fusion_id = runFusion(spec, flush_token);
@@ -843,8 +1000,191 @@ string IndexMaintainer::doFusion(SerialNum serialNum, std::shared_ptr<search::IF
         _fusion_spec.flush_ids.swap(spec.flush_ids);
     } else {
         _fusion_spec.last_fusion_id = new_fusion_id;
+        std::erase_if(_fusion_spec.merged_into, [new_fusion_id](const auto& entry) { return entry.first <= new_fusion_id; });
     }
     return getFusionDir(new_fusion_id);
+}
+
+std::vector<uint32_t> IndexMaintainer::choose_intermediate_ids(const FusionSpec& spec) const {
+    // Called by a flush engine worker thread with _fusion_lock held. Empty means: run a full fusion.
+    if (spec.last_fusion_id == 0 || spec.flush_ids.size() < 2 ||
+        spec.flush_ids.back() - spec.last_fusion_id > _tiered.max_relative_id) {
+        return {};
+    }
+    const uint64_t        base_size = dir_size(fs::path(getFusionDir(spec.last_fusion_id)));
+    std::vector<uint64_t> sizes;
+    uint64_t              total = 0;
+    for (uint32_t id : spec.flush_ids) {
+        sizes.push_back(dir_size(fs::path(getFlushDir(id))));
+        total += sizes.back();
+    }
+    if (total >= _tiered.full_ratio * base_size) {
+        return {};
+    }
+    // Size tiers: flushes up to floor_bytes are tier 0, each further factor of fanout is a tier.
+    auto tier_of = [this](uint64_t size) -> uint32_t {
+        if (size <= _tiered.floor_bytes) {
+            return 0;
+        }
+        return 1 + static_cast<uint32_t>(std::log(double(size) / _tiered.floor_bytes) / std::log(double(_tiered.fanout)));
+    };
+    std::map<uint32_t, std::vector<uint32_t>> by_tier;
+    for (size_t i = 0; i < spec.flush_ids.size(); ++i) {
+        by_tier[tier_of(sizes[i])].push_back(spec.flush_ids[i]);
+    }
+    for (auto& [tier, ids] : by_tier) {
+        if (ids.size() >= _tiered.fanout) {
+            ids.resize(_tiered.fanout);
+            return ids;
+        }
+    }
+    // No tier is full, but the fusion target is due (too many sources): merge the smallest tier that has
+    // at least two indexes, or else the two smallest indexes.
+    for (auto& [tier, ids] : by_tier) {
+        if (ids.size() >= 2) {
+            return ids;
+        }
+    }
+    std::vector<size_t> order(spec.flush_ids.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return sizes[a] < sizes[b]; });
+    std::vector<uint32_t> ids = {spec.flush_ids[order[0]], spec.flush_ids[order[1]]};
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+bool IndexMaintainer::runIntermediateFusion(const FusionSpec& fusion_spec, const std::vector<uint32_t>& ids,
+                                            std::shared_ptr<search::IFlushToken> flush_token) {
+    // Called by a flush engine worker thread
+    CHECK(ids.size() >= 2);
+    TuneFileAttributes tuneFileAttributes(getAttrTune());
+    Schema             schema;
+    {
+        LockGuard slock(_state_lock);
+        LockGuard ilock(_index_update_lock);
+        _activeFusionSchema = std::make_shared<Schema>(_schema);
+        _activeFusionPrunedSchema.reset();
+        schema = _schema;
+    }
+    const uint32_t into_id = ids.back();
+    const fs::path base(_base_dir);
+    const fs::path flush_dir(getFlushDir(into_id));
+    const fs::path inter_dir = base / (intermediate_dir_prefix + std::to_string(into_id));
+    const fs::path dead_dir = base / (dead_dir_prefix + std::to_string(into_id));
+    SerialNum      serialNum = 0;
+    if (fs::exists(fs::path(IndexDiskLayout::getSerialNumFileName(flush_dir.string())))) {
+        serialNum = IndexReadUtilities::readSerialNum(flush_dir.string());
+    }
+    fs::remove_all(inter_dir);
+    FusionRunner fusion_runner(_base_dir, schema, tuneFileAttributes, _ctx.getFileHeaderContext());
+    bool ok = fusion_runner.fuse_intermediate(fusion_spec, ids, inter_dir.string(), serialNum, _operations, flush_token);
+    if (ok) {
+        std::ofstream out(inter_dir / merged_ids_file_name);
+        for (uint32_t id : ids) {
+            if (id != into_id) {
+                out << id << "\n";
+            }
+        }
+        out.close();
+        ok = out.good();
+    }
+    if (ok) {
+        auto prunedSchema = getActiveFusionPrunedSchema();
+        if (prunedSchema) {
+            updateDiskIndexSchema(inter_dir.string(), *prunedSchema, noSerialNumHigh);
+        }
+        // serial.dat last: it is what makes the directory a valid index.
+        ok = IndexWriteUtilities::copySerialNumFile(flush_dir.string(), inter_dir.string());
+    }
+    if (!ok) {
+        LOG(warning, "Intermediate fusion into %u failed", into_id);
+        fs::remove_all(inter_dir);
+        LockGuard slock(_state_lock);
+        LockGuard ilock(_index_update_lock);
+        _activeFusionSchema.reset();
+        _activeFusionPrunedSchema.reset();
+        return false;
+    }
+    sync_dir(inter_dir);
+    // Commit point. The current index collection keeps using the old indexes through their open files.
+    fs::rename(flush_dir, dead_dir);
+    fs::rename(inter_dir, flush_dir);
+    sync_dir(base);
+
+    IntermediateFusionArgs args;
+    args._ids = ids;
+    args._changeGens = getChangeGens();
+    args._prunedSchema = getActiveFusionPrunedSchema();
+    auto new_index(loadDiskIndex(flush_dir.string()));
+    for (;;) {
+        bool success = reconfigure(makeLambdaConfigure(
+            [this, argsP = &args, indexP = &new_index]() { return doneIntermediateFusion(argsP, indexP); }));
+        if (success) {
+            break;
+        }
+        args._changeGens = getChangeGens();
+        args._prunedSchema = getActiveFusionPrunedSchema();
+        if (args._prunedSchema) {
+            updateDiskIndexSchema(flush_dir.string(), *args._prunedSchema, noSerialNumHigh);
+        }
+        new_index = reloadDiskIndex(*new_index);
+    }
+    // Readers of older index collections still hold these files open; unlinking them is safe.
+    fs::remove_all(dead_dir);
+    for (uint32_t id : ids) {
+        if (id != into_id) {
+            fs::remove_all(fs::path(getFlushDir(id)));
+        }
+    }
+    sync_dir(base);
+    return true;
+}
+
+bool IndexMaintainer::doneIntermediateFusion(IntermediateFusionArgs* args, std::shared_ptr<IDiskIndex>* new_index) {
+    // Called by runIntermediateFusion via reconfigurer
+    CHECK(_ctx.getThreadingService().master().isCurrentThread());
+    LockGuard state_lock(_state_lock);
+    if (args->_changeGens != getChangeGens()) {
+        return false; // Must retry operation
+    }
+    if (args->_prunedSchema != getActiveFusionPrunedSchema()) {
+        return false; // Must retry operation
+    }
+    args->_old_source_list = _source_list; // delays destruction
+    std::map<uint32_t, uint32_t> merged_into;
+    for (uint32_t id : args->_ids) {
+        if (id != args->_ids.back()) {
+            merged_into[id] = args->_ids.back();
+        }
+    }
+    const uint32_t into = args->_ids.back() - _last_fusion_id;
+    {
+        LockGuard lock(_index_update_lock);
+        // A new selector, as in doneFusion: queries running on the old index collection keep the old one.
+        auto selector = getSourceSelector().cloneAndSubtract("sourceselector_intermediate", 0);
+        selector->remapSources(relative_merge_table(merged_into, _last_fusion_id));
+        _selector = std::move(selector);
+        _activeFusionSchema.reset();
+        _activeFusionPrunedSchema.reset();
+    }
+    {
+        LockGuard lock(_new_search_lock);
+        auto      current_leaf = getLeaf(lock, _source_list);
+        auto      fsc = std::make_unique<IndexCollection>(_selector);
+        for (size_t i = 0; i < current_leaf->getSourceCount(); ++i) {
+            uint32_t source_id = current_leaf->getSourceId(i);
+            if (source_id == into) {
+                fsc->append(source_id, *new_index);
+            } else if (!merged_into.contains(source_id + _last_fusion_id)) {
+                fsc->append(source_id, current_leaf->getSearchableSP(i));
+            }
+        }
+        fsc->setCurrentIndex(_current_index_id);
+        swapInNewIndex(lock, std::move(fsc), **new_index);
+    }
+    return true;
 }
 
 namespace {

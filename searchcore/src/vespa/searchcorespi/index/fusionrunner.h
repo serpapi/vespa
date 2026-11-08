@@ -54,6 +54,18 @@ public:
      **/
     uint32_t fuse(const FusionSpec& fusion_spec, search::SerialNum lastSerialNum,
                   IIndexMaintainerOperations& operations, std::shared_ptr<search::IFlushToken> flush_token);
+
+    /**
+     * Merge only the flushed indexes in ids (sorted, all newer than fusion_spec.last_fusion_id) into
+     * output_dir, leaving the fused index alone. Documents whose newest version is in another source,
+     * according to the selector of the newest index in fusion_spec.flush_ids, are dropped. The merged index takes the source id ids.back(); output_dir gets the source selector of
+     * index.flush.<ids.back()>, unchanged.
+     *
+     * @return true on success.
+     **/
+    bool fuse_intermediate(const FusionSpec& fusion_spec, const std::vector<uint32_t>& ids,
+                           const std::string& output_dir, search::SerialNum lastSerialNum,
+                           IIndexMaintainerOperations& operations, std::shared_ptr<search::IFlushToken> flush_token);
 };
 
 } // namespace index

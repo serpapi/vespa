@@ -230,6 +230,31 @@ class IndexMaintainer : public IIndexManager, public IWarmupDone {
     bool canRunFusion(const FusionSpec& spec) const;
     bool doneFusion(FusionArgs* args, std::shared_ptr<IDiskIndex>* new_index);
 
+    /**
+     * Tiered fusion (prototype, enabled with VESPA_TIERED_FUSION=1): instead of always merging every
+     * flushed index into the fused index, merge flushed indexes of similar size into an intermediate
+     * index, and run a full fusion only when the flushed and intermediate indexes together reach
+     * full_ratio of the fused index, or when the relative source ids run low.
+     */
+    struct TieredFusionConfig {
+        bool     enabled = false;
+        uint32_t fanout = 4;
+        double   full_ratio = 0.25;
+        uint32_t max_relative_id = 200;
+        uint64_t floor_bytes = 64ull << 20;
+        static TieredFusionConfig from_env();
+    };
+    const TieredFusionConfig _tiered;
+
+    struct IntermediateFusionArgs {
+        std::vector<uint32_t>                       _ids;
+        ChangeGens                                  _changeGens;
+        std::shared_ptr<const Schema>               _prunedSchema;
+        std::shared_ptr<ISearchableIndexCollection> _old_source_list; // Delays destruction
+    };
+    std::vector<uint32_t> choose_intermediate_ids(const FusionSpec& spec) const;
+    bool doneIntermediateFusion(IntermediateFusionArgs* args, std::shared_ptr<IDiskIndex>* new_index);
+
     class SetSchemaArgs {
     public:
         Schema                                      _newSchema;
@@ -294,6 +319,12 @@ public:
      */
     std::string doFusion(SerialNum serialNum, std::shared_ptr<search::IFlushToken> flush_token);
     uint32_t runFusion(const FusionSpec& fusion_spec, std::shared_ptr<search::IFlushToken> flush_token);
+    /**
+     * Merges the flushed indexes in ids (sorted) into one that replaces index.flush.<ids.back()>, without
+     * touching the fused index. Returns true on success.
+     */
+    bool runIntermediateFusion(const FusionSpec& fusion_spec, const std::vector<uint32_t>& ids,
+                               std::shared_ptr<search::IFlushToken> flush_token);
     void removeOldDiskIndexes();
 
     struct FlushStats {

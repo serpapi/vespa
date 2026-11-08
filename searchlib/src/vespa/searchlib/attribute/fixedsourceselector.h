@@ -5,6 +5,8 @@
 #include "attributeguard.h"
 #include "sourceselector.h"
 
+#include <array>
+
 namespace search {
 
 class FixedSourceSelector : public SourceSelector {
@@ -31,6 +33,11 @@ public:
     ~FixedSourceSelector() override;
 
     FixedSourceSelector::UP cloneAndSubtract(const std::string& attrBaseFileName, uint32_t diff);
+    /**
+     * Rewrites every doc's source s to new_source[s] in one pass and commits. Used when several disk
+     * indexes are merged into one that keeps its own source id. Caller must exclude concurrent writers.
+     */
+    void remapSources(const std::array<queryeval::Source, 256>& new_source);
     static FixedSourceSelector::UP load(const std::string& baseFileName, uint32_t currentId);
 
     // Inherit doc from ISourceSelector

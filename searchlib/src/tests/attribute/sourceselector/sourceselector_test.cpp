@@ -384,6 +384,30 @@ TEST(SourceStoreTest, require_that_init_docs_fills_empty_attribute_and_holds_old
     EXPECT_DEATH(store->init_docs(1, [](std::span<int8_t>) noexcept {}), "getNumDocs");
 }
 
+TEST_F(SourceSelectorTest, require_that_remap_sources_rewrites_listed_sources_only)
+{
+    FixedSourceSelector selector(default_source, base_file_name, 10);
+    for (uint32_t lid = 0; lid < 10; ++lid) {
+        selector.setSource(lid, lid % 5);
+    }
+    std::array<queryeval::Source, 256> table;
+    for (uint32_t i = 0; i < table.size(); ++i) {
+        table[i] = i;
+    }
+    table[1] = 3;
+    table[2] = 3;
+    selector.remapSources(table);
+    auto it = selector.createIterator();
+    for (uint32_t lid = 0; lid < 10; ++lid) {
+        uint32_t expected = lid % 5;
+        if (expected == 1 || expected == 2) {
+            expected = 3;
+        }
+        EXPECT_EQ(expected, (uint32_t) it->getSource(lid));
+    }
+    EXPECT_EQ(default_source, selector.getDefaultSource());
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
