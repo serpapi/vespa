@@ -67,11 +67,30 @@ public:
 
 FlushableAttribute::Flusher::Flusher(FlushableAttribute& fattr, SerialNum syncToken,
                                      std::unique_ptr<AttributeDirectory::Writer> writer)
-    : _fattr(fattr), _saveTarget(), _saver(), _syncToken(syncToken), _flushFile(""), _writer(std::move(writer)) {
+    : _fattr(fattr),
+      _saveTarget(),
+      _saver(),
+      _syncToken(syncToken),
+      _flushFile(""),
+      _writer(std::move(writer)),
+      _image_saved(false) {
     fattr._attr->commit(CommitParam(syncToken, CommitParam::UpdateStats::SKIP));
     AttributeVector& attr = *_fattr._attr;
     // Called by attribute field writer executor
     _flushFile = _writer->getSnapshotDir(_syncToken) + "/" + attr.getName();
+    if (vespalib::image::enabled()) {
+        // Memory image: written here, on the attribute's writer thread, so it is a consistent copy without a
+        // saver. Writes to this attribute wait until it is in the page cache.
+        std::filesystem::create_directories(std::filesystem::path(vespalib::dirname(_flushFile)));
+        SerialNumFileHeaderContext fileHeaderContext(_fattr._fileHeaderContext, _syncToken);
+        auto                       create_time = std::chrono::steady_clock::now();
+        _image_saved = attr.save_image_file(_flushFile, fileHeaderContext);
+        if (_image_saved) {
+            attr.set_last_flush_duration(CreateAndFreezeTimes::make_flush_duration(create_time));
+            return;
+        }
+        LOG(info, "Attribute '%s' has no memory image support or state; saving it normally", attr.getName().c_str());
+    }
     _saver = attr.initSave(_flushFile);
     CHECK(_saver);
 }

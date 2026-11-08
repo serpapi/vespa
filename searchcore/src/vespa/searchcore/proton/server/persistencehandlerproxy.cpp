@@ -1,6 +1,7 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "persistencehandlerproxy.h"
+#include "serve_during_replay.h"
 
 #include "documentdb.h"
 #include "feedhandler.h"
@@ -30,6 +31,10 @@ PersistenceHandlerProxy::PersistenceHandlerProxy(DocumentDB::SP documentDB)
 PersistenceHandlerProxy::~PersistenceHandlerProxy() = default;
 
 void PersistenceHandlerProxy::initialize() {
+    if (serve_during_replay()) {
+        // Bucket reads go straight to the bucket db; writes get a transient error until replay is done.
+        return;
+    }
     _documentDB->waitForOnlineState();
 }
 
