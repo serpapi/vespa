@@ -25,7 +25,7 @@ ab)
   for arm in "ab-stock stock" "ab-tiered proto override VESPA_TIERED_FUSION 1"; do
     set -- $arm; name=$1 build=$2; shift 2; envl="$*"
     log "arm $name"; ./arms.sh arm $name $build "$envl" >> /mnt/nvme/out/progress.log 2>&1
-    ./arms.sh feed $name ${AB_OPS:-20000000} >> /mnt/nvme/out/progress.log 2>&1
+    ./arms.sh feed $name ${AB_OPS:-30000000} >> /mnt/nvme/out/progress.log 2>&1
     ./arms.sh check $name >> /mnt/nvme/out/progress.log 2>&1
     log "arm $name done"
   done ;;

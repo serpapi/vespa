@@ -1,7 +1,25 @@
 # REPORT: Vespa fork on 8.781.11, and a content node that restarts fast without fighting fusion
 
-Status: DRAFT, sections marked TODO are filled as runs complete. Preregistration: `PREREG.md` (commit f0934d5e4c1,
-written before any local run).
+Preregistration: `PREREG.md` (commit f0934d5e4c1, written before any local run). Raw outputs (restart JSON,
+perf data, query CSVs, vespa.log) are in `s3://si-greenfield-bench-524519922011/vespa-fork-restart/runs/`, binaries in
+`.../artifacts/`. AWS: one c8gd.16xlarge compile box (~5.2 h) and one i8g.4xlarge measurement node (~8.7 h), both
+spot in the greenfield-bench VPC, terminated and verified; ~$8.
+
+## Summary
+
+| question | answer | evidence |
+|---|---|---|
+| Fork on latest release | `serpapi-8.781.11` (5ecbbf9a1c): 4 patch sets + `-DNDEBUG` fix; all tests pass | §1 |
+| Does the fork help in production? | content-1 serves the same queries at 0.83x matching latency and 0.84x query CPU of the stock nodes | `evals-internal .../runs/fork-ab-content1/REPORT.md` |
+| Where does prod restart time go? | 1,585 s = 320 s load + 1,262 s replay of a 20 GiB (13 h of feed) TLS tail | §2.1 |
+| Why is replay slow? | string-attribute dictionary maintenance with case-folded compare, not decode or I/O | §5 (perf) |
+| Fusion WA, today vs tiered | prod 136x; simulated tiered 6.5-7.5x on all 12 nodes; measured locally 9.9-11.4x -> 4.3-4.5x with no lost docs and p50/p99 latency 0.78x/0.83x | §3, §4 |
+| Cheapest restart wins | `<initialize><threads>` = cores (37 -> 17 s here); `match: cased` on `content_hash`/`path`; crash-only stop | §5 |
+| Restart by design | bounded TLS tail via O(delta) checkpoints for every target: tiered fusion (prototyped), delta attribute/meta-store checkpoints (designed), load-by-map | §6 |
+
+Hypotheses: H1 pass; H2 half falsified (not I/O bound, but not decode bound either); H3 pass (sim); H4 **not
+tested as preregistered** (no prototype bounds the attribute checkpoints yet, so no "restart <= load + 60 s at the
+worst point" run); H5 fails the 5x bound at this node's scale (2.5-3.2x), passes correctness.
 
 ## 1. Fork brought to bleeding edge
 
@@ -93,7 +111,52 @@ index with a global docid space doesn't have without a term-range split of every
 
 ## 4. Tiered fusion prototype (branch `serpapi-8.781.11-tiered-fusion`)
 
-TODO: e2e numbers (H5).
+### End-to-end on the blueprint node (H5)
+
+Same i8g node and 50M-doc snapshot as §5. Each arm restores the snapshot, starts the build, deploys
+`harness/app-ab` (identical in both arms: memory index flushed at 256 MiB so that, with a ~19 GB fused index,
+fusion runs back to back and a full fusion is ~20+ flushes apart, as on a production node), then re-puts 30M
+documents in 2M chunks at fixed offsets (identical content: documents are a function of their id). Two runs per
+arm; the second ("-q") with a 50 QPS open-loop query load (R6's `r6` profile, seed 7) during the whole feed.
+Stock = `vespaengine/vespa:8.781.11`; tiered = the `proto` build (tiered fusion + parallel replay code, only
+`VESPA_TIERED_FUSION=1` set; verified in proton's `/proc/<pid>/environ`), fanout 4, full fusion at 25 % of the
+fused index or 200 relative ids.
+
+| arm | memory index flushed GB (flushes) | full / intermediate merges | fusion + intermediate bytes written GB | index WA | proton `write_bytes` GB | disk indexes searched, mean / max |
+|---|---|---|---|---|---|---|
+| stock | 18.6 (133) | 8 / 0 | 165.7 | 9.9x | 294.1 | 25.6 / 38 |
+| stock -q | 19.8 (156) | 10 / 0 | 207.1 | 11.4x | 342.9 | 24.9 / 36 |
+| **tiered** | 18.4 (130) | 2 / 37 | **65.0** | **4.5x** | **193.0** | **11.3 / 29** |
+| **tiered -q** | 20.0 (159) | 2 / 48 | **65.7** | **4.3x** | **200.1** | **10.8 / 30** |
+
+Per flushed GB, tiered wrote 2.5-3.2x fewer fusion bytes (index WA 4.3-4.5x vs 9.9-11.4x, n = 2 each), and
+33-42 % fewer bytes overall from proton (document store and attribute writes are the same in both arms). Mean
+searched sources fell from ~25 to ~11.
+
+Query latency during the feed, 50 QPS open loop, same query sequence (block bootstrap over 60 s blocks):
+
+| percentile | stock ms | tiered ms | tiered / stock | 95 % CI |
+|---|---|---|---|---|
+| p50 | 124.0 | 96.4 | **0.778** | 0.747-0.809 |
+| p95 | 270.2 | 216.5 | **0.801** | 0.767-0.834 |
+| p99 | 344.2 | 286.7 | **0.833** | 0.793-0.866 |
+
+Correctness: total hits (rank profile `unranked`) for 10 fixed queries, including match-all = 50,000,000, are
+identical between the stock and tiered arms after the feed (all 10 equal in both pairs).
+
+H5 verdict: **fails the preregistered 5x bound** (2.5-3.2x), passes the no-lost-documents condition. The bound
+was set from production's 136x; on this node the fused index is only ~19 GB, so stock's own WA is ~10x, and the
+25 %-of-base rule forces a full fusion every ~25 min (2 per arm). The production-scale effect is the simulation's
+(§3: 136x -> 6.5-7.5x); the local run confirms the direction, the source-count drop and the latency gain, and that
+the mechanism keeps every document.
+
+Open defects found by this run:
+- 2 of 190,326 queries in the tiered -q arm hit the 2 s timeout (504), both scheduled at the exact instants the two
+  full fusions completed (t = 1,943.4 s and 3,415.0 s); stock had 0 of 207,926 across 10 full fusions. Cause not
+  found: the full-fusion path is stock code, but in the tiered arm it starts from a source list that includes
+  intermediate indexes. Must be explained before any canary.
+- 9 "same target webpage.0.ready.summary.flush has been asked to flush again" warnings in the tiered -q arm (0 in
+  the other three arms). Document store target, not index; not investigated.
 
 Design, as built (off unless `VESPA_TIERED_FUSION=1`):
 
@@ -119,7 +182,56 @@ deleted-while-open old files rely on Linux unlink semantics, and the full fusion
 
 ## 5. Restart on the blueprint node (i8g.4xlarge)
 
-TODO.
+Node: i8g.4xlarge spot (16 vCPU Graviton4, 128 GiB, 3.75 TB NVMe), Vespa 8.781.11 in Docker, deployed `webpage`
+schema with production proton overrides (`harness/app`), 50M synthetic documents fed in 4,969 s (10.1k docs/s,
+0 errors). On disk after load: fused index ~19 GB (prod: ~1.06 TB at 465M docs, so index bytes per doc are ~6x
+smaller than production's), document store ~38 GB. Every restart starts from the same reflink snapshot arm;
+`restart.sh` triggers a flush, re-puts N random existing documents, then SIGKILLs proton (or SIGTERMs it through the
+sentinel for `clean`). Times are from proton's own event log.
+
+| run | n | ops replayed | replay s | replay op/s | init s | SIGKILL -> `started` s |
+|---|---|---|---|---|---|---|
+| stock, kill, no tail | 2 | 13-58k | 0.1-0.4 | - | 35.1 / 36.7 | **36.2 / 37.5** |
+| stock, kill after 5M re-puts | 3 | 5.01-5.06M | 41.3 / 42.6 / 42.1 | 122.6k / 117.9k / 119.2k | 35.8-37.3 | **82.8 / 85.3 / 85.4** |
+| stock, clean stop (`flush-on-shutdown`) after 2M | 1 | 2.07M | 26.4 | 78.5k | 36.8 | 66.1 (+ 4.9 s stop) |
+| parallel decode, 8 threads, kill after 5M | 3 | 5.02-5.06M | 40.5 / 38.8 / 36.8 | 125.0k / 129.6k / 137.2k | 36.0-37.2 | **82.2 / 81.3 / 80.1** |
+| parallel decode, kill, no tail | 1 | 68k | 0.4 | - | 37.0 | 38.0 (init to started; see sentinel note) |
+| initializer threads 16 (config only), kill, no tail | 3 | 58k | 0.4 | - | 16.0 / 15.8 / 15.9 | **17.2 / 17.0** (3rd: 104.9, sentinel back-off 88 s; init 15.9) |
+| initializer threads 16, kill after 5M | 1 | 5.06M | 37.8 | 133.9k | 16.8 | **60.3** |
+
+Findings:
+
+- **H1 (replay > 50 % of restart with >= 5M ops): pass.** 42 s of 85 s (49-50 %) at 5M ops; replay grows
+  linearly with the tail, so it dominates past ~5M ops. Production's 14.6M-op tail at its 11.5k op/s is 80 %.
+- **H2: half falsified.** Replay is not I/O bound (NVMe read 60 MB/s average during replay, << device), but the top
+  of the `perf` profile is *not* decode: attribute field writers take 54 % of proton CPU, 36.6 % in
+  `AttributeVector::commit`, 25 % in string enum dictionary lookups (`EnumStoreT<const char*>::find_index`,
+  B-tree `lower_bound`) with case-folding comparison (`FoldedStringCompare::compareFolded`, 20 % self). Document
+  store zstd compression is 11 %; the master thread's decode + dispatch is ~13 %.
+  - This explains production's 10x slower replay (11.5k vs ~120k op/s here): the attributes that lagged at the
+    production restart, `content_hash` and `path`, are plain `string` attributes with default (uncased) matching,
+    so every replayed value is inserted into a dictionary of hundreds of millions of strings with a case-folding
+    comparator. Locally the synthetic dictionaries are small.
+  - Cheapest production fix (config, not code): `match: cased` on `content_hash` (a hash) and `path` (URL paths are
+    case-sensitive); add `dictionary: hash` where only exact match is needed. Not measured here (needs a
+    schema change and refeed of those attributes).
+- **Parallel decode prototype: +8.7 % replay throughput** (median 129.6k vs 119.2k op/s, ranges disjoint), -4 s on a
+  85 s restart. Amdahl-limited exactly as the profile predicts. Kept as a branch, not a recommendation.
+- **"Clean" stop doesn't bound replay**: with `flush-on-shutdown` the prepare-restart strategy weighed flush cost
+  against estimated replay cost and left a 2.07M-op tail; restart was 66 s. Consistent with production, where
+  `prepareRestart` before stopping made outages longer.
+- **Init is thread-starved, not I/O-starved.** `Start initializing components: threads=2`: the default pool is
+  (document databases + 1) threads (`ContentSearchCluster.java:277`), not a function of cores: 2 here, 7 in
+  production on 64 vCPU. Attributes load two at a time (~4 s each, a 20 s staircase), and the document store
+  (9.2 s) waits behind them. The components' own times sum to the init time; the longest single chain is ~17 s.
+  **With `<initialize><threads>16</threads></initialize>` (one line in services.xml) init drops from 35-37 s to
+  15.8-16.8 s and a no-tail restart from 36-38 s to 17 s; the 5M-op restart from 85 s to 60 s.** Production runs
+  7 threads on 64 vCPU for 6 document databases; its init was 320 s with single attributes taking up to 216 s,
+  so there the gain is bounded by the slowest attribute (estimated 320 -> ~220-250 s, not measured).
+- **Sentinel back-off is part of restart time in a crash-only design.** Each SIGKILL doubles the config sentinel's
+  restart penalty (2, 6, 14, 30, ... 510 s, decaying slowly); the 7th kill in one container waited 228 s before
+  proton started. Production restarts the container through systemd, which resets it, but an in-place crash-only
+  restart policy must not escalate on deliberate kills.
 
 ## 7. Blueprint seams on current master: fork or not
 
@@ -175,7 +287,7 @@ Restart time = stop + component load + replay. Per component, today and by desig
 | document meta store checkpoint | 17-19 GB rewritten per flush | O(total) | same delta scheme (gid -> lid/timestamp/bucket rows) | as above |
 | document store | log-structured already | O(delta) | unchanged | - |
 | TLS replay | 14.6M ops, 1,262 s | tail = 20 GiB of feed | tail = 60 s of feed at most; replay with parallel decode (branch `serpapi-8.781.11-fast-replay`) | prod: 60 s x 305 op/s = 18k ops, ~2 s |
-| component load | 320 s (doc meta store 97 s, string/multi-value attributes 166-216 s, docstore 113 s) | read and rebuild every structure | **load = map** for fixed-width columns (single-value numeric attributes, doc meta store arrays): the file layout is the memory layout, `mmap(MAP_PRIVATE)`, faulted in on demand; enum/multi-value attributes keep the rebuild but load in parallel with replay of the fields that don't need them | TODO from local per-attribute load times |
+| component load | 320 s (doc meta store 97 s, string/multi-value attributes 166-216 s, docstore 113 s) | read and rebuild every structure | **load = map** for fixed-width columns (single-value numeric attributes, doc meta store arrays): the file layout is the memory layout, `mmap(MAP_PRIVATE)`, faulted in on demand; enum/multi-value attributes keep the rebuild but load in parallel with replay of the fields that don't need them | locally (50M docs): single-value numeric attributes load in 0.26-0.30 s each, string/multi-value 3.6-4.9 s, doc meta store 7.4 s, document store 7.6-9.9 s; with 16 initializer threads init is 16 s, the doc meta store + document store chain. Map-loading the numeric columns saves little; the doc meta store and string attributes are where load = map pays |
 
 Two things this design deliberately does not do:
 

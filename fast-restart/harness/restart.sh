@@ -28,7 +28,7 @@ if [ $MODE = kill ]; then
 else
   dx vespa-sentinel-cmd restart searchnode > $OUT/sentinel.txt 2>&1
 fi
-while kill -0 $pid 2>/dev/null; do sleep 0.2; done
+while sudo kill -0 $pid 2>/dev/null; do sleep 0.2; done
 T_EXIT=$(date +%s.%N)
 if [ "$PERF" -gt 0 ]; then
   until npid=$(proton_pid) && [ -n "$npid" ] && grep -q "transactionlog.replay.start.*webpage" <(awk -F'\t' -v t=$T_EXIT '$1>t' $LOG); do sleep 1; done

@@ -4,7 +4,8 @@
 #        ./arms.sh arm NAME BUILD [ENV] restore var.snap, start vespa with BUILD (stock | serpapi-8.781.11 | tiered),
 #                                      ENV lines go to default-env.txt (e.g. "override VESPA_TIERED_FUSION 1")
 #        ./arms.sh feed NAME OPS       re-put OPS docs in 2M chunks at fixed offsets, sampling disk indexes and I/O
-#        ./arms.sh check NAME          hit counts of a fixed query set into out/NAME/hits.txt
+#        ./arms.sh check NAME          hit counts of a fixed query set into out/NAME/hits.txt (rank profile
+#                                      "unranked": the default profile caps total hits, ~12k)
 set -euo pipefail
 V=/mnt/nvme/vespa; OUT=/mnt/nvme/out; ART=/mnt/nvme/art
 IMG=vespaengine/vespa:8.781.11
@@ -37,6 +38,10 @@ arm)
   [ -n "$ENVL" ] && echo "$ENVL" >> $OUT/$NAME/default-env.txt
   ARGS+=(-v $OUT/$NAME/default-env.txt:/opt/vespa/conf/vespa/default-env.txt:ro)
   start_vespa "${ARGS[@]}"
+  if [[ $NAME == ab-* ]]; then
+    vespa deploy --wait 600 ~/harness/app-ab > $OUT/$NAME/deploy.txt 2>&1
+    sleep 30
+  fi
   echo "$NAME up: build=$BUILD searchlib=$(dx sha256sum /opt/vespa/lib64/libvespa_searchlib.so | cut -c1-12) proton=$(dx sha256sum /opt/vespa/sbin/vespa-proton-bin | cut -c1-12) env=[$(sudo cat /proc/$(proton_pid)/environ | tr '\0' '\n' | grep -E '^VESPA_(TIERED|REPLAY)' | tr '\n' ' ')]" | tee $OUT/$NAME/arm.txt
   if [ -n "$ENVL" ]; then grep -q "$(echo $ENVL | awk '{print $2}')" $OUT/$NAME/arm.txt || { echo "env not in proton" >&2; exit 1; }; fi ;;
 feed)
@@ -68,7 +73,7 @@ check)
   for q in true "body contains \"${W[0]}\"" "body contains \"${W[1]}\"" "title contains \"${W[2]}\"" \
            "default contains \"${W[3]}\"" "body contains \"${W[4]}\"" "body contains \"${W[5]}\"" \
            "body contains \"${W[6]}\"" "body contains \"${W[7]}\"" "body contains \"${W[0]}\" and title contains \"${W[2]}\""; do
-    c=$(curl -s --data-urlencode "yql=select * from webpage where $q" --data-urlencode hits=0 -G http://localhost:8080/search/ | jq .root.fields.totalCount)
+    c=$(curl -s --data-urlencode "yql=select * from webpage where $q" --data-urlencode hits=0 --data-urlencode ranking=unranked --data-urlencode timeout=60s -G http://localhost:8080/search/ | jq .root.fields.totalCount)
     echo "$c	$q"
   done | tee $D/hits.txt ;;
 esac
