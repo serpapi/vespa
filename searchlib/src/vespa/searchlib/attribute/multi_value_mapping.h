@@ -9,6 +9,7 @@
 #include <vespa/vespalib/datastore/array_store_dynamic_type_mapper.h>
 #include <vespa/vespalib/datastore/dynamic_array_buffer_type.h>
 #include <vespa/vespalib/util/address_space.h>
+#include <vespa/vespalib/util/image_file.h>
 
 namespace search::attribute {
 
@@ -43,6 +44,21 @@ public:
     ConstArrayRef get(uint32_t docId) const { return _store.get(acquire_entry_ref(docId)); }
     ConstArrayRef getDataForIdx(EntryRef idx) const { return _store.get(idx); }
     void set(uint32_t docId, ConstArrayRef values);
+
+    // Memory images (vespalib/util/image_file.h). Writer only.
+    bool can_save_image() const noexcept { return _store.can_save_image(); }
+    void save_image(vespalib::image::ImageWriter& writer) {
+        _store.save_image(writer);
+        _indices.save_image(writer);
+        writer.meta() << uint64_t(_totalValues);
+    }
+    void load_image(vespalib::image::ImageReader& reader) {
+        _store.load_image(reader);
+        _indices.load_image(reader);
+        uint64_t total_values = 0;
+        reader.meta() >> total_values;
+        _totalValues = total_values;
+    }
 
     // get_writable is generally unsafe and should only be used when
     // compacting enum store (replacing old enum index with updated enum index)

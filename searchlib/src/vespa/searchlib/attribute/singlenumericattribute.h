@@ -46,6 +46,11 @@ protected:
         return false;
     }
 
+protected:
+    bool can_save_image() const override { return true; }
+    void save_image(vespalib::image::ImageWriter& writer) override { _data.save_image(writer); }
+    void load_image(vespalib::image::ImageReader& reader) override { _data.load_image(reader); }
+
 public:
     explicit SingleValueNumericAttribute(const std::string& baseFileName); // Only for testing
     SingleValueNumericAttribute(const std::string& baseFileName, const AttributeVector::Config& c);

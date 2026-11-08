@@ -102,6 +102,17 @@ protected:
     bool onAddDoc(DocId doc) override;
 
 public:
+    // Memory images (vespalib/util/image_file.h): the enum store and the lid -> enum vector.
+    bool can_save_enum_image() const { return this->_enumStore.can_save_image(); }
+    void save_enum_image(vespalib::image::ImageWriter& writer) {
+        this->_enumStore.save_image(writer);
+        this->_enumIndices.save_image(writer);
+    }
+    void load_enum_image(vespalib::image::ImageReader& reader) {
+        this->_enumStore.load_image(reader);
+        this->_enumIndices.load_image(reader);
+    }
+
     SingleValueEnumAttribute(const std::string& baseFileName, const AttributeVector::Config& cfg);
     ~SingleValueEnumAttribute();
 

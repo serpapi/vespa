@@ -23,6 +23,17 @@ class MultiValueStringPostingAttributeT
     : public MultiValueStringAttributeT<B, T>,
       protected PostingListAttributeSubBase<AttributeWeightPosting, typename B::LoadedVector,
                                             typename B::LoadedValueType, typename B::EnumStore> {
+protected:
+    bool can_save_image() const override { return this->can_save_enum_image() && this->can_save_posting_image(); }
+    void save_image(vespalib::image::ImageWriter& writer) override {
+        this->save_enum_image(writer);
+        this->save_posting_image(writer);
+    }
+    void load_image(vespalib::image::ImageReader& reader) override {
+        this->load_enum_image(reader);
+        this->load_posting_image(reader);
+    }
+
 public:
     using EnumStore = typename MultiValueStringAttributeT<B, T>::EnumStore;
     using EnumStoreBatchUpdater = typename EnumStore::BatchUpdater;

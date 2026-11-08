@@ -58,6 +58,19 @@ protected:
     virtual void mergeMemoryStats(vespalib::MemoryUsage& total) { (void)total; }
 
 public:
+    // Memory images (vespalib/util/image_file.h): the enum store and the multi-value mapping.
+    bool can_save_enum_image() const {
+        return this->_enumStore.can_save_image() && this->_mvMapping.can_save_image();
+    }
+    void save_enum_image(vespalib::image::ImageWriter& writer) {
+        this->_enumStore.save_image(writer);
+        this->_mvMapping.save_image(writer);
+    }
+    void load_enum_image(vespalib::image::ImageReader& reader) {
+        this->_enumStore.load_image(reader);
+        this->_mvMapping.load_image(reader);
+    }
+
     MultiValueEnumAttribute(const std::string& baseFileName, const AttributeVector::Config& cfg);
 
     void onCommit() override;

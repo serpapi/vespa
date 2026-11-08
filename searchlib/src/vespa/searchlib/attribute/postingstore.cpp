@@ -2,6 +2,9 @@
 
 #include "postingstore.h"
 
+#include <vespa/vespalib/util/image_file.h>
+#include <vespa/vespalib/util/exceptions.h>
+
 #include <vespa/check_require.h>
 #include <vespa/searchcommon/attribute/config.h>
 #include <vespa/searchcommon/attribute/status.h>
@@ -59,7 +62,8 @@ bool PostingStoreBase2::resizeBitVectors(uint32_t newSize, uint32_t newCapacity)
 
 template <typename DataT>
 PostingStore<DataT>::PostingStore(IEnumStoreDictionary& dictionary, Status& status, const Config& config)
-    : Parent(false), PostingStoreBase2(dictionary, status, config), _bvType(1, 1024u, RefType::offsetSize()) {
+    : Parent(false), PostingStoreBase2(dictionary, status, config), _bvType(1024u, RefType::offsetSize()) {
+    _bvType.set_image_context(&_bvCapacity, &_store.getGenerationHolder());
     // TODO: Add type for bitvector
     _store.addType(&_bvType);
     _store.init_primary_buffers();
@@ -703,6 +707,70 @@ PostingStore<DataT>::make_bitvector_iterator(RefType ref, uint32_t doc_id_limit,
     }
     const auto& bv = getBitVectorEntry(ref)->_bv->reader();
     return BitVectorIterator::create(&bv, std::min(bv.size(), doc_id_limit), match_data, strict, false);
+}
+
+void BitVectorEntryBufferType::save_image_entries(const void* buffer, EntryCount num_entries,
+                                                  vespalib::image::ImageWriter& writer) const {
+    auto* entries = static_cast<const BitVectorEntry*>(buffer);
+    auto& meta = writer.meta();
+    for (EntryCount i = 0; i < num_entries; ++i) {
+        meta << entries[i]._tree.ref() << uint8_t(entries[i]._bv ? 1 : 0);
+        if (entries[i]._bv) {
+            const BitVector& bv = entries[i]._bv->writer();
+            meta << uint32_t(bv.size()) << writer.write_section(bv.getStart(), bv.getFileBytes());
+        }
+    }
+}
+
+void BitVectorEntryBufferType::load_image_entries(void* buffer, EntryCount num_entries, EntryCount reserved_entries,
+                                                  vespalib::image::ImageReader& reader) {
+    auto* entries = static_cast<BitVectorEntry*>(buffer);
+    auto& meta = reader.meta();
+    for (EntryCount i = 0; i < num_entries; ++i) {
+        uint32_t tree = 0;
+        uint8_t  has_bv = 0;
+        meta >> tree >> has_bv;
+        if (i >= reserved_entries) {
+            new (static_cast<void*>(entries + i)) BitVectorEntry();
+        }
+        entries[i]._tree = vespalib::datastore::EntryRef(tree);
+        entries[i]._bv.reset();
+        if (has_bv != 0) {
+            uint32_t                size = 0;
+            vespalib::image::Section section;
+            meta >> size >> section;
+            auto bv = std::make_shared<GrowableBitVector>(size, std::max(size, *_bv_capacity), *_generation_holder);
+            if (section.length > bv->writer().getFileBytes()) {
+                throw vespalib::IllegalStateException("Bitvector in memory image is larger than its size");
+            }
+            reader.read(section, bv->writer().getStart());
+            bv->writer().invalidateCachedCount();
+            entries[i]._bv = std::move(bv);
+        }
+    }
+}
+
+template <typename DataT> void PostingStore<DataT>::save_image(vespalib::image::ImageWriter& writer) {
+    Parent::save_image(writer);
+    auto& meta = writer.meta();
+    meta << _bvSize << _bvCapacity << _minBvDocFreq << _maxBvDocFreq << _bvExtraBytes << uint64_t(_bvs.size());
+    for (uint32_t ref : _bvs) {
+        meta << ref;
+    }
+}
+
+template <typename DataT> void PostingStore<DataT>::load_image(vespalib::image::ImageReader& reader) {
+    Parent::load_image(reader);
+    auto&    meta = reader.meta();
+    uint64_t num_bvs = 0;
+    meta >> _bvSize >> _bvCapacity >> _minBvDocFreq >> _maxBvDocFreq >> _bvExtraBytes >> num_bvs;
+    _bvs.clear();
+    for (uint64_t i = 0; i < num_bvs; ++i) {
+        uint32_t ref = 0;
+        meta >> ref;
+        _bvs.insert(ref);
+        _status.incBitVectors();
+    }
 }
 
 template class PostingStore<BTreeNoLeafData>;

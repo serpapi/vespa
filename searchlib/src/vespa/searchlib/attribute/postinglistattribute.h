@@ -55,6 +55,10 @@ protected:
     void updatePostings(PostingMap& changePost, const vespalib::datastore::EntryComparator& cmp);
     void clearAllPostings();
     void disableFreeLists() { _posting_store.disableFreeLists(); }
+    // Memory images (vespalib/util/image_file.h).
+    bool can_save_posting_image() const { return _posting_store.can_save_image(); }
+    void save_posting_image(vespalib::image::ImageWriter& writer) { _posting_store.save_image(writer); }
+    void load_posting_image(vespalib::image::ImageReader& reader) { _posting_store.load_image(reader); }
     void disable_entry_hold_list() { _posting_store.disable_entry_hold_list(); }
     void handle_load_posting_lists_and_update_enum_store(enumstore::EnumeratedPostingsLoader& loader);
     bool forwardedOnAddDoc(DocId doc, size_t wantSize, size_t wantCapacity);

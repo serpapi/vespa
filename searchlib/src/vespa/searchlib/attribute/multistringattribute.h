@@ -47,6 +47,11 @@ protected:
                                                                       common::sortspec::MissingPolicy policy,
                                                                       std::string_view missing_value) const override;
 
+protected:
+    bool can_save_image() const override { return this->can_save_enum_image(); }
+    void save_image(vespalib::image::ImageWriter& writer) override { this->save_enum_image(writer); }
+    void load_image(vespalib::image::ImageReader& reader) override { this->load_enum_image(reader); }
+
 public:
     MultiValueStringAttributeT(const std::string& name, const AttributeVector::Config& c);
     MultiValueStringAttributeT(const std::string& name);

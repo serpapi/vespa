@@ -363,7 +363,7 @@ bool AttributeVector::onLoad(vespalib::Executor*) {
 }
 
 namespace {
-constexpr uint32_t ATTRIBUTE_IMAGE_MAGIC = 0x41494d31; // "AIM1"
+constexpr uint32_t ATTRIBUTE_IMAGE_MAGIC = 0x41494d32; // "AIM2"
 }
 
 bool AttributeVector::can_save_image() const {
@@ -390,7 +390,7 @@ bool AttributeVector::save_image_file(std::string_view baseFileName, const commo
     {
         vespalib::image::ImageWriter writer(base + ".img.tmp");
         writer.meta() << ATTRIBUTE_IMAGE_MAGIC << uint32_t(getNumDocs()) << uint32_t(getCommittedDocIdLimit())
-                      << uint64_t(getCreateSerialNum());
+                      << uint64_t(getCreateSerialNum()) << uint32_t(getMaxValueCount());
         save_image(writer);
         set_size_on_disk(writer.finish());
     }
@@ -412,9 +412,9 @@ bool AttributeVector::save_image_file(std::string_view baseFileName, const commo
 
 bool AttributeVector::load_image_file() {
     vespalib::image::ImageReader reader(getBaseFileName() + ".img");
-    uint32_t                     magic = 0, num_docs = 0, committed_doc_id_limit = 0;
+    uint32_t                     magic = 0, num_docs = 0, committed_doc_id_limit = 0, max_value_count = 0;
     uint64_t                     create_serial_num = 0;
-    reader.meta() >> magic >> num_docs >> committed_doc_id_limit >> create_serial_num;
+    reader.meta() >> magic >> num_docs >> committed_doc_id_limit >> create_serial_num >> max_value_count;
     if (magic != ATTRIBUTE_IMAGE_MAGIC) {
         throw vespalib::IllegalStateException(fmt("'%s.img' is not an attribute memory image", getBaseFileName().c_str()));
     }
@@ -423,6 +423,7 @@ bool AttributeVector::load_image_file() {
     setCreateSerialNum(create_serial_num);
     setNumDocs(num_docs);
     setCommittedDocIdLimit(committed_doc_id_limit);
+    _highestValueCount.store(max_value_count, std::memory_order_relaxed);
     return true;
 }
 int32_t AttributeVector::getWeight(DocId, uint32_t) const {

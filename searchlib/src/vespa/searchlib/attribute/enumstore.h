@@ -108,6 +108,23 @@ public:
     void set_ref_count(Index idx, uint32_t ref_count) override { get_entry_base(idx).set_ref_count(ref_count); }
 
     uint32_t get_num_uniques() const override { return _dict->get_num_uniques(); }
+
+    // Memory images (vespalib/util/image_file.h). Writer only, right after the dictionary is frozen.
+    bool can_save_image() const {
+        return _dict->can_save_image() && _store.get_allocator().get_data_store().can_save_image();
+    }
+    void save_image(vespalib::image::ImageWriter& writer) {
+        _store.get_allocator().get_data_store().save_image(writer);
+        _dict->save_image(writer);
+        writer.meta() << _default_value_ref.load_relaxed().ref();
+    }
+    void load_image(vespalib::image::ImageReader& reader) {
+        _store.get_allocator().get_data_store().load_image(reader);
+        _dict->load_image(reader);
+        uint32_t default_value_ref = 0;
+        reader.meta() >> default_value_ref;
+        _default_value_ref.store_release(vespalib::datastore::EntryRef(default_value_ref));
+    }
     bool use_folding() const { return has_string_type && _match_uncased; }
 
     vespalib::MemoryUsage get_values_memory_usage() const override {

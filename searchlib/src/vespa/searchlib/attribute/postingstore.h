@@ -35,6 +35,30 @@ public:
     BitVectorEntry() noexcept : _tree(), _bv() {}
 };
 
+/*
+ * Buffer type for bitvector posting lists. In memory images (vespalib/util/image_file.h) each bitvector is
+ * saved as a section and copied back into a new bitvector on load.
+ */
+class BitVectorEntryBufferType : public vespalib::datastore::BufferType<BitVectorEntry> {
+    const uint32_t*             _bv_capacity;
+    vespalib::GenerationHolder* _generation_holder;
+
+public:
+    BitVectorEntryBufferType(uint32_t min_entries, uint32_t max_entries) noexcept
+        : vespalib::datastore::BufferType<BitVectorEntry>(1, min_entries, max_entries),
+          _bv_capacity(nullptr),
+          _generation_holder(nullptr) {}
+    void set_image_context(const uint32_t* bv_capacity, vespalib::GenerationHolder* generation_holder) noexcept {
+        _bv_capacity = bv_capacity;
+        _generation_holder = generation_holder;
+    }
+    bool image_serializable() const noexcept override { return _generation_holder != nullptr; }
+    void save_image_entries(const void* buffer, EntryCount num_entries,
+                            vespalib::image::ImageWriter& writer) const override;
+    void load_image_entries(void* buffer, EntryCount num_entries, EntryCount reserved_entries,
+                            vespalib::image::ImageReader& reader) override;
+};
+
 class PostingStoreBase2 {
 protected:
     static constexpr uint32_t  BUFFERTYPE_BITVECTOR = 9u;
@@ -64,7 +88,7 @@ public:
 
 template <typename DataT>
 class PostingStore : public PostingListTraits<DataT>::PostingStoreBase, public PostingStoreBase2 {
-    vespalib::datastore::BufferType<BitVectorEntry> _bvType;
+    BitVectorEntryBufferType _bvType;
 
 public:
     using DataType = DataT;
@@ -108,6 +132,11 @@ public:
 
     PostingStore(IEnumStoreDictionary& dictionary, Status& status, const Config& config);
     ~PostingStore();
+
+    // Memory images (vespalib/util/image_file.h). Writer only, right after freeze().
+    bool can_save_image() const noexcept { return Parent::can_save_image(); }
+    void save_image(vespalib::image::ImageWriter& writer);
+    void load_image(vespalib::image::ImageReader& reader);
 
     bool removeSparseBitVectors() override;
     void consider_remove_sparse_bitvector(std::vector<EntryRef>& refs);
