@@ -37,6 +37,11 @@ class GenericHeader;
 class Executor;
 } // namespace vespalib
 
+namespace vespalib::image {
+class ImageReader;
+class ImageWriter;
+} // namespace vespalib::image
+
 namespace vespalib::alloc {
 class MemoryAllocator;
 class Alloc;
@@ -56,6 +61,10 @@ class IAttributeSaveTarget;
 class IDocidWithWeightPostingStore;
 class QueryTermSimple;
 class QueryTermUCS4;
+
+namespace common {
+class FileHeaderContext;
+}
 
 namespace fef {
 class TermFieldMatchData;
@@ -342,6 +351,24 @@ public:
     bool hasLoadData() const;
 
     bool isEnumeratedSaveFormat() const;
+
+    /*
+     * Memory images (vespalib/util/image_file.h), used when VESPA_IMAGE_RESTART=1. save_image_file() runs on the
+     * attribute's writer thread at a commit point. It writes baseFileName.img, the attribute as it is in memory,
+     * and a baseFileName.dat holding only the file header, so the attribute directory looks as usual. It
+     * returns false, writing nothing, when this attribute type or its contents cannot be imaged; the caller
+     * then saves normally. load() maps baseFileName.img when it exists instead of calling onLoad().
+     */
+    bool save_image_file(std::string_view baseFileName, const common::FileHeaderContext& fileHeaderContext);
+    bool has_image_file() const;
+
+protected:
+    // Per attribute type: write or map the type's own structures. The base class handles doc counts.
+    virtual bool can_save_image() const;
+    virtual void save_image(vespalib::image::ImageWriter& writer);
+    virtual void load_image(vespalib::image::ImageReader& reader);
+
+public:
     bool load();
     bool load(vespalib::Executor* executor);
     void commit() { commit(CommitParam::UpdateStats::SKIP); }
@@ -419,6 +446,7 @@ private:
     virtual bool applyWeight(DocId doc, const FieldValue& fv, const ArithmeticValueUpdate& wAdjust);
     virtual bool applyWeight(DocId doc, const FieldValue& fv, const document::AssignValueUpdate& wAdjust);
     virtual bool onLoad(vespalib::Executor* executor);
+    bool load_image_file();
 
     attribute::BaseName                               _baseFileName;
     std::unique_ptr<Config>                           _config;

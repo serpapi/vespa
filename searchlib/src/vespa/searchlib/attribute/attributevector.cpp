@@ -25,6 +25,10 @@
 #include <vespa/searchlib/query/query_term_decoder.h>
 #include <vespa/searchlib/util/file_settings.h>
 #include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/util/image_file.h>
+#include <vespa/fastos/file.h>
+#include <vespa/searchlib/common/fileheadercontext.h>
+#include <vespa/vespalib/data/fileheader.h>
 #include <vespa/vespalib/util/jsonwriter.h>
 #include <vespa/vespalib/util/mmap_file_allocator.h>
 #include <vespa/vespalib/util/mmap_file_allocator_factory.h>
@@ -304,6 +308,9 @@ attribute::AttributeHeader AttributeVector::createAttributeHeader(std::string_vi
 }
 
 bool AttributeVector::hasLoadData() const {
+    if (has_image_file()) {
+        return true;
+    }
     if (!exists(getBaseFileName() + ".dat")) {
         return false;
     }
@@ -340,7 +347,7 @@ bool AttributeVector::load() {
 bool AttributeVector::load(vespalib::Executor* executor) {
     CHECK(!_loaded);
     _initialization_status->start_loading();
-    bool loaded = onLoad(executor);
+    bool loaded = has_image_file() ? load_image_file() : onLoad(executor);
     if (loaded) {
         commit();
         incGeneration();
@@ -353,6 +360,70 @@ bool AttributeVector::load(vespalib::Executor* executor) {
 
 bool AttributeVector::onLoad(vespalib::Executor*) {
     return false;
+}
+
+namespace {
+constexpr uint32_t ATTRIBUTE_IMAGE_MAGIC = 0x41494d31; // "AIM1"
+}
+
+bool AttributeVector::can_save_image() const {
+    return false;
+}
+
+void AttributeVector::save_image(vespalib::image::ImageWriter&) {
+    throw vespalib::IllegalStateException("save_image() called on an attribute type without memory images");
+}
+
+void AttributeVector::load_image(vespalib::image::ImageReader&) {
+    throw vespalib::IllegalStateException("load_image() called on an attribute type without memory images");
+}
+
+bool AttributeVector::has_image_file() const {
+    return vespalib::image::enabled() && exists(getBaseFileName() + ".img");
+}
+
+bool AttributeVector::save_image_file(std::string_view baseFileName, const common::FileHeaderContext& fileHeaderContext) {
+    if (!vespalib::image::enabled() || !can_save_image()) {
+        return false;
+    }
+    std::string base(baseFileName);
+    {
+        vespalib::image::ImageWriter writer(base + ".img.tmp");
+        writer.meta() << ATTRIBUTE_IMAGE_MAGIC << uint32_t(getNumDocs()) << uint32_t(getCommittedDocIdLimit())
+                      << uint64_t(getCreateSerialNum());
+        save_image(writer);
+        set_size_on_disk(writer.finish());
+    }
+    std::filesystem::rename(base + ".img.tmp", base + ".img");
+    std::string datName = base + ".dat";
+    FastOS_File datFile;
+    if (!datFile.OpenWriteOnlyTruncate(datName.c_str())) {
+        throw vespalib::IllegalStateException(fmt("Cannot create '%s'", datName.c_str()));
+    }
+    vespalib::FileHeader header(FileSettings::DIRECTIO_ALIGNMENT);
+    fileHeaderContext.addTags(header, datName);
+    createAttributeHeader(base).addTags(header);
+    header.writeFile(datFile);
+    if (!datFile.Sync() || !datFile.Close()) {
+        throw vespalib::IllegalStateException(fmt("Cannot write '%s'", datName.c_str()));
+    }
+    return true;
+}
+
+bool AttributeVector::load_image_file() {
+    vespalib::image::ImageReader reader(getBaseFileName() + ".img");
+    uint32_t                     magic = 0, num_docs = 0, committed_doc_id_limit = 0;
+    uint64_t                     create_serial_num = 0;
+    reader.meta() >> magic >> num_docs >> committed_doc_id_limit >> create_serial_num;
+    if (magic != ATTRIBUTE_IMAGE_MAGIC) {
+        throw vespalib::IllegalStateException(fmt("'%s.img' is not an attribute memory image", getBaseFileName().c_str()));
+    }
+    getGenerationHolder().reclaim_all();
+    load_image(reader);
+    setCreateSerialNum(create_serial_num);
+    setNumDocs(num_docs);
+    setCommittedDocIdLimit(committed_doc_id_limit);
+    return true;
 }
 int32_t AttributeVector::getWeight(DocId, uint32_t) const {
     return 1;

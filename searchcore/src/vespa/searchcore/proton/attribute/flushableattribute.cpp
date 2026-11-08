@@ -16,6 +16,7 @@
 #include <vespa/searchlib/common/serialnumfileheadercontext.h>
 #include <vespa/searchlib/util/filekit.h>
 #include <vespa/vespalib/io/fileutil.h>
+#include <vespa/vespalib/util/image_file.h>
 #include <vespa/vespalib/util/isequencedtaskexecutor.h>
 #include <vespa/vespalib/util/stringfmt.h>
 
@@ -48,6 +49,7 @@ private:
     uint64_t                                    _syncToken;
     std::string                                 _flushFile;
     std::unique_ptr<AttributeDirectory::Writer> _writer;
+    bool                                        _image_saved;
 
     bool saveAttribute(); // not updating snap info.
 public:
@@ -77,6 +79,11 @@ FlushableAttribute::Flusher::Flusher(FlushableAttribute& fattr, SerialNum syncTo
 FlushableAttribute::Flusher::~Flusher() = default;
 
 bool FlushableAttribute::Flusher::saveAttribute() {
+    if (_image_saved) {
+        File::sync(_writer->getSnapshotDir(_syncToken));
+        File::sync(_writer->get_dir());
+        return true;
+    }
     std::filesystem::create_directory(std::filesystem::path(vespalib::dirname(_flushFile)));
     SerialNumFileHeaderContext fileHeaderContext(_fattr._fileHeaderContext, _syncToken);
     bool                       saveSuccess = true;
