@@ -40,6 +40,7 @@ def simulate(flushes, base0, thr, keep, policy, **kw):
     src_area = 0.0; max_src = 0; last_t = t0; peak_extra = 0
     events = collections.deque(flushes)
     t = t0
+    ids_since_full = 0                      # every flushed memory index consumes a source id
     def nsrc(): return 1 + len(segs) + 1   # base + segs + memory index
     while events or merging:
         nxt = events[0][0] if events else math.inf
@@ -50,14 +51,14 @@ def simulate(flushes, base0, thr, keep, policy, **kw):
         if tm <= nxt:
             inputs, out, with_base = merging
             for s in inputs: segs.remove(s)
-            if with_base: base = out
+            if with_base: base = out; ids_since_full = len(segs)
             else: segs.append(out)
             merging = None
         else:
-            _, size = events.popleft(); segs.append(Seg(size, 0))
+            _, size = events.popleft(); segs.append(Seg(size, 0)); ids_since_full += 1
         max_src = max(max_src, nsrc())
         if not merging:
-            plan = policy(base, segs, **kw)
+            plan = policy(base, segs, ids_since_full=ids_since_full, **kw)
             if plan:
                 inputs, with_base, level = plan
                 in_bytes = sum(s.size for s in inputs) + (base.size if with_base else 0)
@@ -74,15 +75,16 @@ def simulate(flushes, base0, thr, keep, policy, **kw):
                 peak_extra_gb=peak_extra / 1e9, base_gb=base.size / 1e9)
 
 # ---- policies: return (inputs, include_base, output_level) or None ----
-def vespa_current(base, segs, trigger=1):
+def vespa_current(base, segs, trigger=1, ids_since_full=0):
     # FusionRunner: base + every flushed index. `trigger` = flushed indexes needed before a fusion
     # starts; calibrated below so the simulated WA matches the measured one for this trace.
     return (list(segs), True, 99) if len(segs) >= trigger else None
 
-def tiered(base, segs, fanout=4, full_ratio=0.10):
-    # Intermediate fusion (ISSUE_DRAFT): merge `fanout` segments of the same level into level+1;
-    # full fusion into the base only when intermediates exceed full_ratio of the base.
-    if sum(s.size for s in segs) > full_ratio * base.size:
+def tiered(base, segs, fanout=4, full_ratio=0.10, max_ids=200, ids_since_full=0):
+    # Intermediate fusion (ISSUE_DRAFT, prototype branch serpapi-8.781.11-tiered-fusion): merge `fanout`
+    # segments of the same level into level+1; full fusion into the base when intermediates exceed
+    # full_ratio of the base, or when the relative source ids (limit 254) pass max_ids.
+    if sum(s.size for s in segs) > full_ratio * base.size or ids_since_full > max_ids:
         return (list(segs), True, 99)
     by = collections.defaultdict(list)
     for s in segs: by[s.level].append(s)
@@ -90,7 +92,7 @@ def tiered(base, segs, fanout=4, full_ratio=0.10):
         if len(by[lvl]) >= fanout: return (by[lvl][:fanout], False, lvl + 1)
     return None
 
-def size_tiered(base, segs, fanout=10, floor=2e9):
+def size_tiered(base, segs, fanout=10, floor=2e9, ids_since_full=0):
     # Lucene TieredMergePolicy / Tantivy LogMergePolicy shape: merge `fanout` segments of similar
     # size (log buckets above `floor`); the base takes part when the top tier reaches its size.
     def bucket(sz): return 0 if sz <= floor else int(math.log(sz / floor, fanout)) + 1
