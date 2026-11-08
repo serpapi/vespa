@@ -361,6 +361,9 @@ public:
      */
     bool save_image_file(std::string_view baseFileName, const common::FileHeaderContext& fileHeaderContext);
     bool has_image_file() const;
+    // True when the files on disk are a memory image (saved or loaded since start). An image is as large as
+    // the attribute in memory, so flush strategies must not read its size as disk bloat.
+    bool image_on_disk() const noexcept { return _image_on_disk; }
 
 protected:
     // Per attribute type: write or map the type's own structures. The base class handles doc counts.
@@ -456,6 +459,7 @@ private:
     GenerationHolder                                  _genHolder;
     Status                                            _status;
     std::atomic<int>                                  _highestValueCount;
+    bool                                              _image_on_disk = false;
     uint32_t                                          _enumMax;
     std::atomic<uint32_t>                             _committedDocIdLimit;   // docid limit for search
     uint32_t                                          _uncommittedDocIdLimit; // based on queued changes

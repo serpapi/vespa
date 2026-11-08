@@ -216,6 +216,9 @@ IFlushTarget::MemoryGain FlushableAttribute::getApproxMemoryGain() const {
 }
 
 IFlushTarget::DiskGain FlushableAttribute::getApproxDiskGain() const {
+    if (_attr->image_on_disk()) {
+        return DiskGain(_attr->size_on_disk(), _attr->size_on_disk()); // the next image is as large
+    }
     return DiskGain(_attr->size_on_disk(), _attr->getEstimatedSaveByteSize());
 }
 

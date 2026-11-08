@@ -394,6 +394,7 @@ bool AttributeVector::save_image_file(std::string_view baseFileName, const commo
         save_image(writer);
         set_size_on_disk(writer.finish());
     }
+    _image_on_disk = true;
     std::filesystem::rename(base + ".img.tmp", base + ".img");
     std::string datName = base + ".dat";
     FastOS_File datFile;
@@ -424,6 +425,7 @@ bool AttributeVector::load_image_file() {
     setNumDocs(num_docs);
     setCommittedDocIdLimit(committed_doc_id_limit);
     _highestValueCount.store(max_value_count, std::memory_order_relaxed);
+    _image_on_disk = true;
     return true;
 }
 int32_t AttributeVector::getWeight(DocId, uint32_t) const {

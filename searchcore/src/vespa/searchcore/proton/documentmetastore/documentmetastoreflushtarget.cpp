@@ -219,6 +219,9 @@ IFlushTarget::MemoryGain DocumentMetaStoreFlushTarget::getApproxMemoryGain() con
 }
 
 IFlushTarget::DiskGain DocumentMetaStoreFlushTarget::getApproxDiskGain() const {
+    if (_dms->image_on_disk()) {
+        return DiskGain(_dms->size_on_disk(), _dms->size_on_disk()); // the next image is as large
+    }
     return DiskGain(_dms->size_on_disk(), _dms->getEstimatedSaveByteSize());
 }
 
