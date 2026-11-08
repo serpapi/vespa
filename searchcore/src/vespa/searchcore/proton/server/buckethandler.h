@@ -24,6 +24,7 @@ private:
     std::vector<IBucketStateChangedHandler*> _changedHandlers;
     bool                                     _nodeUp;
     bool                                     _nodeMaintenance;
+    bool                                     _have_cluster_state;
 
     void performSetCurrentState(document::BucketId bucketId, storage::spi::BucketInfo::ActiveState newState,
                                 IGenericResultHandler* resultHandler);

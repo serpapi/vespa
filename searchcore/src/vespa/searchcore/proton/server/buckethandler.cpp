@@ -61,7 +61,8 @@ BucketHandler::BucketHandler(vespalib::Executor& executor)
       _ready(nullptr),
       _changedHandlers(),
       _nodeUp(false),
-      _nodeMaintenance(false) {
+      _nodeMaintenance(false),
+      _have_cluster_state(false) {
     LOG(spam, "BucketHandler::BucketHandler");
 }
 
@@ -125,6 +126,8 @@ constexpr const char* bool_str(bool v) noexcept {
 void BucketHandler::notifyClusterStateChanged(const std::shared_ptr<IBucketStateCalculator>& newCalc) {
     bool oldNodeUp = _nodeUp;
     bool oldNodeMaintenance = _nodeMaintenance;
+    bool firstClusterState = !_have_cluster_state;
+    _have_cluster_state = true;
     _nodeUp = newCalc->nodeUp(); // Up, Retired or Initializing
     _nodeMaintenance = newCalc->nodeMaintenance();
     LOG(spam, "notifyClusterStateChanged; up: %s -> %s, maintenance: %s -> %s", bool_str(oldNodeUp),
@@ -138,7 +141,9 @@ void BucketHandler::notifyClusterStateChanged(const std::shared_ptr<IBucketState
     //  - Maintenance -> !Maintenance, since we'd otherwise introduce a bunch of transient duplicate
     //    results into queries if we transition to an available state.
     //    The assumption is that the system has already activated buckets on other nodes in such a scenario.
-    if ((oldNodeUp && !_nodeUp) || oldNodeMaintenance) {
+    //  - A first cluster state with the node Down. Nothing can be activated before the first cluster state with
+    //    the node up, so this only deactivates an active state restored from a memory image.
+    if ((oldNodeUp && !_nodeUp) || oldNodeMaintenance || (firstClusterState && !_nodeUp)) {
         deactivateAllActiveBuckets();
     }
 }
