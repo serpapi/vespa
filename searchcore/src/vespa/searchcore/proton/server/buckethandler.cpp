@@ -4,6 +4,7 @@
 
 #include "ibucketstatechangedhandler.h"
 
+#include <vespa/vespalib/util/image_file.h>
 #include <vespa/check_require.h>
 #include <vespa/searchcore/proton/bucketdb/bucket_db_owner.h>
 #include <vespa/vespalib/util/lambdatask.h>
@@ -61,7 +62,9 @@ BucketHandler::BucketHandler(vespalib::Executor& executor)
       _ready(nullptr),
       _changedHandlers(),
       _nodeUp(false),
-      _nodeMaintenance(false) {
+      _nodeMaintenance(false),
+      _cluster_state_seen(false),
+      _initial_maintenance(false) {
     LOG(spam, "BucketHandler::BucketHandler");
 }
 
@@ -129,7 +132,10 @@ void BucketHandler::notifyClusterStateChanged(const std::shared_ptr<IBucketState
     _nodeMaintenance = newCalc->nodeMaintenance();
     LOG(spam, "notifyClusterStateChanged; up: %s -> %s, maintenance: %s -> %s", bool_str(oldNodeUp),
         bool_str(_nodeUp), bool_str(oldNodeMaintenance), bool_str(_nodeMaintenance));
+    bool first_state = !_cluster_state_seen;
+    _cluster_state_seen = true;
     if (_nodeMaintenance) {
+        _initial_maintenance = _initial_maintenance || first_state;
         return; // Don't deactivate buckets in maintenance mode; let query traffic drain away naturally.
     }
     // We implicitly deactivate buckets in two edge cases:
@@ -138,7 +144,12 @@ void BucketHandler::notifyClusterStateChanged(const std::shared_ptr<IBucketState
     //  - Maintenance -> !Maintenance, since we'd otherwise introduce a bunch of transient duplicate
     //    results into queries if we transition to an available state.
     //    The assumption is that the system has already activated buckets on other nodes in such a scenario.
-    if ((oldNodeUp && !_nodeUp) || oldNodeMaintenance) {
+    // With memory images (vespalib/util/image_file.h) the active state is restored at load. After a crash the
+    // cluster controller sets the node to maintenance, so the first state a restarted node sees is often
+    // maintenance; leaving it must not drop the restored state, since this node never served in between.
+    bool leaving_initial_maintenance = oldNodeMaintenance && _initial_maintenance && vespalib::image::enabled();
+    _initial_maintenance = false;
+    if ((oldNodeUp && !_nodeUp) || (oldNodeMaintenance && !leaving_initial_maintenance)) {
         deactivateAllActiveBuckets();
     }
 }

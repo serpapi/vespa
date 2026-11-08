@@ -24,6 +24,8 @@ private:
     std::vector<IBucketStateChangedHandler*> _changedHandlers;
     bool                                     _nodeUp;
     bool                                     _nodeMaintenance;
+    bool _cluster_state_seen;     // any cluster state received since start
+    bool _initial_maintenance;    // the first cluster state put the node in maintenance
 
     void performSetCurrentState(document::BucketId bucketId, storage::spi::BucketInfo::ActiveState newState,
                                 IGenericResultHandler* resultHandler);
