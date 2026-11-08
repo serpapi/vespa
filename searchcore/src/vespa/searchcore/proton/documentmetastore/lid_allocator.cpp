@@ -81,6 +81,24 @@ void LidAllocator::load_used_lids(const uint64_t* words, uint32_t num_bits) {
     _usedLids.load_bits(words, num_bits);
 }
 
+void LidAllocator::load_active_lids(const uint64_t* words, uint32_t num_bits) {
+    CHECK(!isFreeListConstructed());
+    CHECK(_activeLids.empty());
+    CHECK(num_bits == _usedLids.size());
+    _activeLids.load_bits(words, num_bits);
+    // Word by word, as this runs at load: O(lids / 64).
+    const auto* used = static_cast<const uint64_t*>(_usedLids.getBitVector().getStart());
+    const auto* active = static_cast<const uint64_t*>(_activeLids.getBitVector().getStart());
+    uint32_t    full_words = num_bits / 64;
+    for (uint32_t i = 0; i < full_words; ++i) {
+        CHECK((active[i] & ~used[i]) == 0);
+    }
+    for (uint32_t lid = full_words * 64; lid < num_bits; ++lid) {
+        CHECK(!_activeLids.testBit(lid) || _usedLids.testBit(lid));
+    }
+    _numActiveLids.store(_activeLids.count(), std::memory_order_relaxed);
+}
+
 void LidAllocator::unregisterLid(DocId lid) {
     CHECK(!_pendingHoldLids.testBit(lid));
     if (isFreeListConstructed()) {
