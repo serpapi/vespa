@@ -14,6 +14,7 @@
 #include <vespa/vespalib/data/fileheader.h>
 #include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/stllike/asciistream.h>
+#include <vespa/vespalib/util/exceptions.h>
 #include <vespa/vespalib/util/executor.h>
 #include <vespa/vespalib/util/lambdatask.h>
 
@@ -79,6 +80,7 @@ std::string FileChunk::createDatFileName(const std::string& name) {
 FileChunk::FileChunk(FileId fileId, NameId nameId, const std::string& baseName, const TuneFileSummary& tune,
                      const IBucketizer* bucketizer)
     : _fileId(fileId),
+      _imageChunks(0),
       _nameId(nameId),
       _name(nameId.createName(baseName)),
       _erasedCount(0),
@@ -146,7 +148,7 @@ void FileChunk::erase() {
 }
 
 void FileChunk::updateLidMap(const unique_lock& guard, ISetLid& ds, uint64_t serialNum, uint32_t docIdLimit) {
-    CHECK(_chunkInfo.empty());
+    CHECK(_chunkInfo.size() == _imageChunks);
 
     FastOS_File idxFile(_idxFileName.c_str());
     idxFile.enableMemoryMap(0);
@@ -181,10 +183,16 @@ void FileChunk::updateLidMap(const unique_lock& guard, ISetLid& ds, uint64_t ser
                 serialNum = chunkMeta.getLastSerial();
             }
             CHECK(serialNum <= chunkMeta.getLastSerial());
-            serialNum = handleChunk(guard, ds, docIdLimit, bucketizerGuard, globalBucketMap, chunkMeta);
+            if (count < _imageChunks) {
+                serialNum = skipImageChunk(docIdLimit, bucketizerGuard, globalBucketMap, chunkMeta, count);
+            } else {
+                serialNum = handleChunk(guard, ds, docIdLimit, bucketizerGuard, globalBucketMap, chunkMeta);
+            }
             CHECK(serialNum >= _lastPersistedSerialNum.load(std::memory_order_relaxed));
             _lastPersistedSerialNum.store(serialNum, std::memory_order_relaxed);
         } catch (const vespalib::IllegalStateException& e) {
+            // The image was only used after checking that the .idx file holds its chunks.
+            CHECK(count >= _imageChunks);
             LOG(warning, "Exception deserializing idx file : %s", e.what());
             LOG(warning, "File '%s' seems to be partially truncated. Will truncate from size=%" PRId64 " to %" PRId64,
                 _idxFileName.c_str(), fileSize, lastKnownGoodPos);
@@ -200,7 +208,29 @@ void FileChunk::updateLidMap(const unique_lock& guard, ISetLid& ds, uint64_t ser
             break;
         }
     }
+    CHECK(_chunkInfo.size() >= _imageChunks);
     _numUniqueBuckets = globalBucketMap.getNumBuckets();
+}
+
+uint64_t FileChunk::skipImageChunk(uint32_t docIdLimit, const GenerationGuard& bucketizerGuard,
+                                   BucketDensityComputer& globalBucketMap, const TmpChunkMeta& chunkMeta,
+                                   size_t chunkId) {
+    const ChunkInfo& restored = _chunkInfo[chunkId];
+    CHECK(restored.getOffset() == chunkMeta.getOffset() && restored.getSize() == chunkMeta.getSize() &&
+          restored.getLastSerial() == chunkMeta.getLastSerial());
+    BucketDensityComputer bucketMap(_bucketizer);
+    if (_bucketizer) {
+        for (size_t i(0), m(chunkMeta.getNumEntries()); i < m; i++) {
+            const LidMeta& lidMeta(chunkMeta[i]);
+            if ((lidMeta.getLid() < docIdLimit) && (lidMeta.size() > 0)) {
+                document::BucketId bucketId = _bucketizer->getBucketOf(bucketizerGuard, lidMeta.getLid());
+                bucketMap.recordLid(bucketId);
+                globalBucketMap.recordLid(bucketId);
+            }
+        }
+    }
+    addNumBuckets(bucketMap.getNumBuckets());
+    return chunkMeta.getLastSerial();
 }
 
 uint64_t FileChunk::handleChunk(const unique_lock& guard, ISetLid& ds, uint32_t docIdLimit,
@@ -558,6 +588,107 @@ void FileChunk::eraseIdxFile(const std::string& name) {
 void FileChunk::eraseDatFile(const std::string& name) {
     std::string fileName(createDatFileName(name));
     std::filesystem::remove(std::filesystem::path(fileName));
+}
+
+FileChunk::ImageState FileChunk::get_image_state() const {
+    ImageState state;
+    state.fileId = _fileId.getId();
+    state.nameId = _nameId.getId();
+    state.numLids = _numLids;
+    state.addedBytes = getAddedBytes();
+    state.erasedCount = getErasedCount();
+    state.erasedBytes = getErasedBytes();
+    state.sumNumBuckets = _sumNumBuckets;
+    state.numChunksWithBuckets = _numChunksWithBuckets;
+    state.numUniqueBuckets = _numUniqueBuckets;
+    state.lastPersistedSerialNum = getLastPersistedSerialNum();
+    state.idxHeaderLen = _idxHeaderLen;
+    state.docIdLimit = _docIdLimit;
+    return state;
+}
+
+bool FileChunk::save_image_chunks(vespalib::image::ImageWriter& writer, ImageState& state) const {
+    if (state.numChunks > _chunkInfo.size()) {
+        return false;
+    }
+    for (uint32_t i = 0; i < state.numChunks; ++i) {
+        if (!_chunkInfo[i].valid()) {
+            return false;
+        }
+    }
+    state.chunks = writer.write_section(_chunkInfo.data(), state.numChunks * sizeof(ChunkInfo));
+    return true;
+}
+
+namespace {
+
+vespalib::alloc::Alloc map_image_chunks(const vespalib::image::ImageReader& reader,
+                                        const FileChunk::ImageState& state, size_t chunkInfoSize) {
+    if (state.chunks.length != state.numChunks * chunkInfoSize) {
+        throw vespalib::IllegalStateException(make_string("Image file '%s': bad chunk section for file %" PRIu64,
+                                                          reader.path().c_str(), state.nameId));
+    }
+    return reader.map(state.chunks, state.chunks.length, nullptr);
+}
+
+} // namespace
+
+void FileChunk::load_image(const vespalib::image::ImageReader& reader, const ImageState& state, bool replayFollows) {
+    CHECK(_chunkInfo.empty() && (state.fileId == _fileId.getId()) && (state.nameId == _nameId.getId()));
+    auto             mapped = map_image_chunks(reader, state, sizeof(ChunkInfo));
+    const ChunkInfo* chunks = static_cast<const ChunkInfo*>(mapped.get());
+    _chunkInfo.assign(chunks, chunks + state.numChunks);
+    _imageChunks = state.numChunks;
+    _numLids = state.numLids;
+    _addedBytes.store(state.addedBytes, std::memory_order_relaxed);
+    _erasedCount.store(state.erasedCount, std::memory_order_relaxed);
+    _erasedBytes.store(state.erasedBytes, std::memory_order_relaxed);
+    if (!replayFollows) {
+        _sumNumBuckets = state.sumNumBuckets;
+        _numChunksWithBuckets = state.numChunksWithBuckets;
+        _numUniqueBuckets = state.numUniqueBuckets;
+        _lastPersistedSerialNum.store(state.lastPersistedSerialNum, std::memory_order_relaxed);
+        _idxHeaderLen = state.idxHeaderLen;
+        _docIdLimit = state.docIdLimit;
+    }
+}
+
+bool FileChunk::idx_starts_with_image_chunks(const std::string& name, const vespalib::image::ImageReader& reader,
+                                             const ImageState& state) {
+    if (state.numChunks == 0) {
+        return true;
+    }
+    auto             mapped = map_image_chunks(reader, state, sizeof(ChunkInfo));
+    const ChunkInfo* chunks = static_cast<const ChunkInfo*>(mapped.get());
+    std::string      idxFileName = createIdxFileName(name);
+    FastOS_File      idxFile(idxFileName.c_str());
+    idxFile.enableMemoryMap(0);
+    if (!idxFile.OpenReadOnly() || !idxFile.IsMemoryMapped()) {
+        return false;
+    }
+    uint32_t            docIdLimit = std::numeric_limits<uint32_t>::max();
+    uint64_t            idxHeaderLen = readIdxHeader(idxFile, docIdLimit);
+    vespalib::nbostream is(static_cast<const char*>(idxFile.MemoryMapPtr(0)) + idxHeaderLen,
+                           idxFile.getSize() - idxHeaderLen);
+    for (uint32_t count = 0; count < state.numChunks; ++count) {
+        if (is.empty()) {
+            return false;
+        }
+        TmpChunkMeta chunkMeta;
+        try {
+            chunkMeta.deserialize(is);
+            chunkMeta.fill(is);
+        } catch (const vespalib::IllegalStateException&) {
+            return false;
+        }
+        const ChunkInfo& expected = chunks[count];
+        if ((expected.getOffset() != chunkMeta.getOffset()) || (expected.getSize() != chunkMeta.getSize()) ||
+            (expected.getLastSerial() != chunkMeta.getLastSerial()))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 DataStoreFileChunkStats FileChunk::getStats() const {
