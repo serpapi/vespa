@@ -437,7 +437,8 @@ bool DocumentMetaStore::onLoad(vespalib::Executor*) {
 
 namespace {
 
-constexpr uint32_t DOCUMENT_META_STORE_IMAGE_MAGIC = 0x444d5331; // "DMS1"
+constexpr uint32_t DOCUMENT_META_STORE_IMAGE_MAGIC_V1 = 0x444d5331; // "DMS1": no active state
+constexpr uint32_t DOCUMENT_META_STORE_IMAGE_MAGIC = 0x444d5332;    // "DMS2"
 
 /*
  * Calls func(bucket_id, state) for each run of documents with the same bucket id in gid order, with the state of
@@ -473,8 +474,10 @@ bool DocumentMetaStore::can_save_image() const {
 
 /*
  * Saves what onLoad() would rebuild: the metadata vector and the gid to lid b-tree are saved as memory images, the
- * used lids as bitvector words, and this sub db's bucket states in the metadata stream. As with a normal save,
- * held, free and active lids are not saved: they are rebuilt by populateActiveBuckets() and constructFreeList().
+ * used lids as bitvector words, and this sub db's bucket states in the metadata stream. The ready sub db, which
+ * owns bucket activation, also saves its active lids and the active buckets of the bucket db, so a restart serves
+ * the same active set right away instead of waiting for the cluster state to activate bucket by bucket. As with a
+ * normal save, held and free lids are not saved: constructFreeList() rebuilds them.
  * Called on the writer thread right after a commit, so the b-tree is frozen.
  */
 void DocumentMetaStore::save_image(vespalib::image::ImageWriter& writer) {
@@ -489,6 +492,26 @@ void DocumentMetaStore::save_image(vespalib::image::ImageWriter& writer) {
         writer.write_section(used_lids.getStart(), search::BitVector::num_bytes_plain(used_lids_size));
     meta << used_lids_size << used_lids_section;
     save_image_bucket_states(meta);
+    save_image_active_state(writer);
+}
+
+void DocumentMetaStore::save_image_active_state(vespalib::image::ImageWriter& writer) const {
+    auto& meta = writer.meta();
+    bool  has_active_state = (_subDbType == SubDbType::READY);
+    meta << uint8_t(has_active_state);
+    if (!has_active_state) {
+        return;
+    }
+    const auto& active_lids = _lidAlloc.getActiveLids();
+    uint32_t    active_lids_size = active_lids.size();
+    auto        active_lids_section =
+        writer.write_section(active_lids.getStart(), search::BitVector::num_bytes_plain(active_lids_size));
+    meta << active_lids_size << active_lids_section;
+    auto active_buckets = _bucketDB->takeGuard()->getActiveBuckets();
+    meta << uint64_t(active_buckets.size());
+    for (const auto& bucket_id : active_buckets) {
+        meta << uint64_t(bucket_id.getRawId());
+    }
 }
 
 void DocumentMetaStore::save_image_bucket_states(vespalib::nbostream& os) const {
@@ -511,7 +534,7 @@ void DocumentMetaStore::load_image(vespalib::image::ImageReader& reader) {
     uint8_t  track_document_sizes = 0;
     uint8_t  track_32bit_document_sizes = 0;
     meta >> magic >> sub_db_type >> track_document_sizes >> track_32bit_document_sizes;
-    if (magic != DOCUMENT_META_STORE_IMAGE_MAGIC) {
+    if (magic != DOCUMENT_META_STORE_IMAGE_MAGIC && magic != DOCUMENT_META_STORE_IMAGE_MAGIC_V1) {
         throw IllegalStateException(
             make_string("'%s' is not a document meta store memory image", reader.path().c_str()));
     }
@@ -552,6 +575,9 @@ void DocumentMetaStore::load_image(vespalib::image::ImageReader& reader) {
         _lidAlloc.load_used_lids(static_cast<const uint64_t*>(used_lids.get()), used_lids_size);
     }
     load_image_bucket_states(meta);
+    if (magic == DOCUMENT_META_STORE_IMAGE_MAGIC) {
+        load_image_active_state(reader);
+    }
 
     _requires_document_ids_from_docstore = false;
     _requires_doc_sizes_from_docstore = false;
@@ -584,6 +610,44 @@ void DocumentMetaStore::load_image_bucket_states(vespalib::nbostream& is) {
                      "rebuilding bucket states from all documents",
             getBaseFileName().c_str());
         rebuild_bucket_states();
+    }
+}
+
+void DocumentMetaStore::load_image_active_state(vespalib::image::ImageReader& reader) {
+    auto&   meta = reader.meta();
+    uint8_t has_active_state = 0;
+    meta >> has_active_state;
+    if (has_active_state == 0) {
+        return;
+    }
+    if (_subDbType != SubDbType::READY) {
+        throw IllegalStateException(make_string("Document meta store memory image '%s' has an active state, but "
+                                                "is not for the ready sub db",
+                                                reader.path().c_str()));
+    }
+    uint32_t                 active_lids_size = 0;
+    vespalib::image::Section active_lids_section;
+    meta >> active_lids_size >> active_lids_section;
+    if (active_lids_size != _metadataStore.size() ||
+        active_lids_section.length != search::BitVector::num_bytes_plain(active_lids_size))
+    {
+        throw IllegalStateException(make_string("Document meta store memory image '%s' has %u active lid bits for "
+                                                "%zu lids",
+                                                reader.path().c_str(), active_lids_size, _metadataStore.size()));
+    }
+    {
+        auto active_lids = reader.map(active_lids_section, active_lids_section.length, nullptr);
+        _lidAlloc.load_active_lids(static_cast<const uint64_t*>(active_lids.get()), active_lids_size);
+    }
+    uint64_t num_active_buckets = 0;
+    meta >> num_active_buckets;
+    // Set after this sub db's bucket states are added, so the bucket db counts their documents as active. Sub dbs
+    // loaded later add theirs to the active count when they add their states.
+    auto guard = _bucketDB->takeGuard();
+    for (uint64_t i = 0; i < num_active_buckets; ++i) {
+        uint64_t raw_bucket_id = 0;
+        meta >> raw_bucket_id;
+        guard->setBucketState(BucketId(raw_bucket_id), true);
     }
 }
 

@@ -9,7 +9,10 @@
 #include <vespa/searchlib/attribute/attributefilesavetarget.h>
 #include <vespa/searchlib/common/flush_token.h>
 #include <vespa/searchlib/common/tunefileinfo.h>
+#include <vespa/searchlib/fef/matchdatalayout.h>
 #include <vespa/searchlib/index/dummyfileheadercontext.h>
+#include <vespa/searchlib/queryeval/blueprint.h>
+#include <vespa/searchlib/queryeval/searchiterator.h>
 #include <vespa/vespalib/gtest/gtest.h>
 #include <vespa/vespalib/util/hw_info.h>
 #include <vespa/vespalib/util/image_file.h>
@@ -236,6 +239,59 @@ void use_after_load(DocumentMetaStore& dms, Feeder& feeder, uint32_t first_new) 
     feeder.put_range(first_new + 3000, 1000); // reuses freed lids
 }
 
+// Compares every bucket in either db; a bucket missing from one db compares as an empty, inactive one.
+uint32_t bucket_union_mismatches(BucketDBOwner& exp_db, BucketDBOwner& act_db) {
+    auto exp_guard = exp_db.takeGuard();
+    auto act_guard = act_db.takeGuard();
+    EXPECT_EQ(exp_guard->getNumActiveDocs(), act_guard->getNumActiveDocs());
+    auto buckets = exp_guard->getBuckets();
+    auto act_buckets = act_guard->getBuckets();
+    buckets.insert(buckets.end(), act_buckets.begin(), act_buckets.end());
+    std::sort(buckets.begin(), buckets.end());
+    buckets.erase(std::unique(buckets.begin(), buckets.end()), buckets.end());
+    uint32_t mismatches = 0;
+    for (const auto& bucket_id : buckets) {
+        BucketState exp = exp_guard->get(bucket_id);
+        BucketState act = act_guard->get(bucket_id);
+        if (exp.getChecksum() != act.getChecksum() || exp.getReadyCount() != act.getReadyCount() ||
+            exp.getNotReadyCount() != act.getNotReadyCount() || exp.getRemovedCount() != act.getRemovedCount() ||
+            exp.getReadyDocSizes() != act.getReadyDocSizes() || exp.isActive() != act.isActive())
+        {
+            ++mismatches;
+        }
+    }
+    return mismatches;
+}
+
+uint32_t active_lid_mismatches(const DocumentMetaStore& exp, const DocumentMetaStore& act) {
+    EXPECT_EQ(exp.getNumActiveLids(), act.getNumActiveLids());
+    uint32_t mismatches = 0;
+    uint32_t limit = std::min(exp.getCommittedDocIdLimit(), act.getCommittedDocIdLimit());
+    for (uint32_t lid = 0; lid < limit; ++lid) {
+        if (exp.getActiveLids().testBit(lid) != act.getActiveLids().testBit(lid)) {
+            ++mismatches;
+        }
+    }
+    return mismatches;
+}
+
+// Search-visible lids, as matching sees them through the white list blueprint.
+std::vector<uint32_t> visible_lids(const DocumentMetaStore& dms) {
+    auto     blueprint = dms.createWhiteListBlueprint();
+    uint32_t limit = dms.getCommittedDocIdLimit();
+    blueprint->basic_plan(true, limit);
+    blueprint->fetchPostings(search::queryeval::ExecuteInfo::FULL);
+    search::fef::MatchDataLayout mdl;
+    auto                         md = mdl.createMatchData();
+    auto                         search = blueprint->createSearch(*md);
+    std::vector<uint32_t>        result;
+    search->initRange(1, limit);
+    for (uint32_t lid = search->seekFirst(1); lid < limit; lid = search->seekNext(lid + 1)) {
+        result.push_back(lid);
+    }
+    return result;
+}
+
 std::string snapshot_file(const std::string& base_dir, uint64_t serial) {
     return base_dir + "/snapshot-" + std::to_string(serial) + "/" + DocumentMetaStore::getFixedName();
 }
@@ -319,6 +375,98 @@ TEST_F(DocumentMetaStoreImageTest, image_round_trip_matches_stock_load) {
     remove_files(image_name);
 }
 
+TEST_F(DocumentMetaStoreImageTest, image_restores_active_state) {
+    constexpr uint32_t num_docs = 100000;
+    std::string        stock_name("active_stock");
+    std::string        image_name("active_image");
+    DocumentMetaStore  dms(std::make_shared<BucketDBOwner>());
+    dms.constructFreeList();
+    Feeder feeder(dms, 12);
+    feeder.put_range(1, num_docs);
+    churn(dms, num_docs);
+    ASSERT_FALSE(HasFatalFailure());
+    BucketId::List buckets = dms.getBucketDB().takeGuard()->getBuckets();
+    std::sort(buckets.begin(), buckets.end());
+    BucketId::List active;
+    for (size_t i = 0; i < buckets.size(); i += 3) {
+        dms.setBucketState(buckets[i], true);
+        active.push_back(buckets[i]);
+    }
+    for (size_t i = 0; i < buckets.size(); i += 21) {
+        dms.setBucketState(buckets[i], false); // activated above, then deactivated
+    }
+    dms.setBucketState(BucketId(16, 0x1234), true); // an active bucket without documents
+    feeder.put_range(num_docs + 1, 2000);           // inserts into active buckets get active lids
+    dms.commit();
+    ASSERT_GT(dms.getNumActiveLids(), 0u);
+    ASSERT_LT(dms.getNumActiveLids(), dms.getNumUsedLids());
+    size_t active_docs = dms.getBucketDB().takeGuard()->getNumActiveDocs();
+    ASSERT_GT(active_docs, 0u);
+    save_stock(dms, stock_name);
+    ASSERT_TRUE(dms.save_image_file(image_name, _file_header_context));
+
+    DocumentMetaStore image(std::make_shared<BucketDBOwner>(), image_name);
+    ASSERT_TRUE(image.load());
+    EXPECT_EQ(dms.getNumActiveLids(), image.getNumActiveLids());
+    EXPECT_EQ(0u, active_lid_mismatches(dms, image));
+    EXPECT_EQ(0u, bucket_union_mismatches(dms.getBucketDB(), image.getBucketDB()));
+    EXPECT_EQ(dms.getBucketDB().takeGuard()->getActiveBuckets(),
+              image.getBucketDB().takeGuard()->getActiveBuckets());
+    EXPECT_EQ(visible_lids(dms), visible_lids(image));
+    EXPECT_TRUE(image.getBucketDB().takeGuard()->validateIntegrity());
+
+    // A cluster state arrives: the stock store gets the ramp, the restored one only applies changes.
+    DocumentMetaStore stock(std::make_shared<BucketDBOwner>(), stock_name);
+    ASSERT_TRUE(stock.load());
+    EXPECT_EQ(0u, stock.getNumActiveLids());
+    auto active_buckets = dms.getBucketDB().takeGuard()->getActiveBuckets();
+    stock.populateActiveBuckets(active_buckets);
+    image.populateActiveBuckets(active_buckets);
+    EXPECT_EQ(0u, active_lid_mismatches(stock, image));
+    EXPECT_EQ(0u, bucket_union_mismatches(stock.getBucketDB(), image.getBucketDB()));
+    EXPECT_EQ(visible_lids(stock), visible_lids(image));
+    for (size_t i = 0; i < active_buckets.size(); i += 4) {
+        stock.setBucketState(active_buckets[i], false);
+        image.setBucketState(active_buckets[i], false);
+    }
+    for (size_t i = 1; i < buckets.size(); i += 7) {
+        stock.setBucketState(buckets[i], true);
+        image.setBucketState(buckets[i], true);
+    }
+    EXPECT_EQ(0u, active_lid_mismatches(stock, image));
+    EXPECT_EQ(0u, bucket_union_mismatches(stock.getBucketDB(), image.getBucketDB()));
+    EXPECT_EQ(visible_lids(stock), visible_lids(image));
+    // Deactivating everything, as when the node goes down, leaves nothing visible.
+    auto still_active = image.getBucketDB().takeGuard()->getActiveBuckets(); // setBucketState takes the guard
+    for (const auto& bucket_id : still_active) {
+        image.setBucketState(bucket_id, false);
+    }
+    EXPECT_EQ(0u, image.getNumActiveLids());
+    EXPECT_EQ(0u, image.getBucketDB().takeGuard()->getNumActiveDocs());
+    EXPECT_TRUE(visible_lids(image).empty());
+    remove_files(stock_name);
+    remove_files(image_name);
+}
+
+TEST_F(DocumentMetaStoreImageTest, only_the_ready_sub_db_restores_active_state) {
+    std::string       image_name("notready_image");
+    auto              bucket_db = std::make_shared<BucketDBOwner>();
+    DocumentMetaStore dms(bucket_db, "documentmetastore", search::GrowStrategy(), SubDbType::NOTREADY);
+    dms.constructFreeList();
+    Feeder feeder(dms, 12);
+    feeder.put_range(1, 1000);
+    auto buckets = bucket_db->takeGuard()->getBuckets();
+    bucket_db->takeGuard()->setBucketState(buckets[0], true);
+    feeder.put_range(1001, 1000);
+    ASSERT_TRUE(dms.save_image_file(image_name, _file_header_context));
+    DocumentMetaStore image(std::make_shared<BucketDBOwner>(), image_name, search::GrowStrategy(),
+                            SubDbType::NOTREADY);
+    ASSERT_TRUE(image.load());
+    EXPECT_EQ(0u, image.getNumActiveLids());
+    EXPECT_TRUE(image.getBucketDB().takeGuard()->getActiveBuckets().empty());
+    remove_files(image_name);
+}
+
 TEST_F(DocumentMetaStoreImageTest, flush_target_writes_image_and_initializer_loads_it) {
     ASSERT_TRUE(vespalib::image::enabled());
     constexpr uint32_t num_docs = 20000;
@@ -383,6 +531,8 @@ TEST_F(DocumentMetaStoreImageTest, DISABLED_benchmark_stock_and_image_load) {
         auto   start = vespalib::steady_clock::now();
         feeder.put_range(1, num_docs);
         LOG(info, "fed %u documents in %.0f ms", num_docs, elapsed_ms(start));
+        auto all_buckets = dms.getBucketDB().takeGuard()->getBuckets(); // populateActiveBuckets takes the guard
+        dms.populateActiveBuckets(all_buckets);                          // a ready sub db serving everything
         start = vespalib::steady_clock::now();
         save_stock(dms, stock_name);
         stock_save_ms = elapsed_ms(start);
@@ -413,6 +563,7 @@ TEST_F(DocumentMetaStoreImageTest, DISABLED_benchmark_stock_and_image_load) {
         image_lookup_ms = elapsed_ms(start);
         EXPECT_EQ((num_docs + 999) / 1000, found);
         EXPECT_EQ(stock.getNumUsedLids(), image.getNumUsedLids());
+        EXPECT_EQ(image.getNumUsedLids(), image.getNumActiveLids());
     }
     fprintf(stderr,
             "docs=%u stock: save %.0f ms, %lu bytes, load %.1f ms | image: save %.0f ms, %lu bytes, load %.1f ms, "

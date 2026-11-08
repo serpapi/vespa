@@ -41,9 +41,14 @@ public:
     void registerLid(DocId lid) { _usedLids.setBit(lid); }
     /*
      * Memory images: sets the used lids of a freshly sized allocator from saved bitvector words. As after a
-     * normal load, no lid is active, held or free until populateActiveBuckets() and constructFreeList().
+     * normal load, no lid is held or free until constructFreeList().
      */
     void load_used_lids(const uint64_t* words, uint32_t num_bits);
+    /*
+     * Memory images: sets the active lids from saved bitvector words, after load_used_lids(). Every active lid
+     * must be used.
+     */
+    void load_active_lids(const uint64_t* words, uint32_t num_bits);
     void unregisterLid(DocId lid);
     void unregister_lids(const std::vector<DocId>& lids);
     vespalib::MemoryUsage getMemoryUsage() const;
