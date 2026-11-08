@@ -273,6 +273,7 @@ private:
                         vespalib::CpuUsage::Category cpu_category);
     SerialNum flushActive(SerialNum syncToken);
     void flushActiveAndWait(SerialNum syncToken);
+    void flushActiveAndWriteLidInfoImage(SerialNum syncToken);
     void flushFileAndWait(MonitorGuard guard, WriteableFileChunk& file, SerialNum syncToken);
     SerialNum getMinLastPersistedSerialNum() const {
         return (_fileChunks.empty() ? 0 : _fileChunks.back()->getLastPersistedSerialNum());
@@ -288,7 +289,8 @@ private:
     void startImageCapture(const MonitorGuard& guard, SerialNum syncToken);
     void recordLidChange(const MonitorGuard& guard, uint32_t lid);
     void writeLidInfoImage(SerialNum syncToken);
-    void invalidateLidInfoImages(const MonitorGuard& guard);
+    void abortImageCapture(const MonitorGuard& guard);
+    void removeLidInfoImages(const MonitorGuard& guard);
     std::string createImageFileName(SerialNum serialNum) const;
     std::map<SerialNum, std::string> findImageFiles() const;
 

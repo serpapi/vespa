@@ -408,7 +408,8 @@ std::pair<bool, LogDataStore::FileId> LogDataStore::findNextToCompact(bool dueTo
     }
     if (retval.first) {
         _currentlyCompacting.insert(_fileChunks[retval.second.getId()]->getNameId());
-        invalidateLidInfoImages(guard);
+        // The image on disk stays valid until the compacted file is removed, see compactFile().
+        abortImageCapture(guard);
     }
     return retval;
 }
@@ -425,7 +426,11 @@ void LogDataStore::compactWorst(uint64_t syncToken, bool compactDiskBloat) {
         if (worst.first) {
             compactFile(worst.second);
         }
-        flushActiveAndWait(syncToken);
+        if (worst.first && _useImages) {
+            flushActiveAndWriteLidInfoImage(syncToken);
+        } else {
+            flushActiveAndWait(syncToken);
+        }
         usage = getDiskFootprint();
         bloat = getDiskBloat();
         LOG(info, "Done compacting due to %s: %s", reason, bloatMsg(bloat, usage).c_str());
@@ -462,6 +467,19 @@ SerialNum LogDataStore::flushActive(SerialNum syncToken) {
     syncToken = flushFile(guard, active, syncToken, CpuCategory::WRITE);
     startImageCapture(guard, syncToken);
     return syncToken;
+}
+
+void LogDataStore::flushActiveAndWriteLidInfoImage(SerialNum syncToken) {
+    // As flushActiveAndWait(), with the image capture of initFlush() and the image write of flush() around it.
+    MonitorGuard        guard(_updateLock);
+    WriteableFileChunk& active = getActive(guard);
+    syncToken = flushFile(guard, active, syncToken, CpuCategory::COMPACT);
+    startImageCapture(guard, syncToken);
+    guard.unlock();
+    active.waitForDiskToCatchUpToNow();
+    _tlSyncer.sync(syncToken);
+    active.flushPendingChunks(syncToken);
+    writeLidInfoImage(syncToken);
 }
 
 void LogDataStore::flushActiveAndWait(SerialNum syncToken) {
@@ -546,6 +564,8 @@ void LogDataStore::compactFile(FileId fileId) {
         _genHandler.update_oldest_used_generation();
         if (currentGeneration < _genHandler.get_oldest_used_generation()) {
             if (canFileChunkBeDropped(guard, fc->getFileId())) {
+                // An image refers to the file. compactWorst() writes a new image after this.
+                removeLidInfoImages(guard);
                 toDie = std::move(fc);
                 break;
             }
@@ -1119,7 +1139,7 @@ void LogDataStore::accept(IDataStoreVisitor& visitor, IDataStoreVisitorProgress&
             FileChunk::UP toDie;
             {
                 MonitorGuard guard(_updateLock);
-                invalidateLidInfoImages(guard);
+                removeLidInfoImages(guard);
                 toDie = std::move(_fileChunks[fcId.getId()]);
             }
             toDie->erase();
@@ -1228,8 +1248,11 @@ size_t LogDataStore::max_file_size() const noexcept {
 void LogDataStore::compactLidSpace(uint32_t wantedDocLidLimit) {
     MonitorGuard guard(_updateLock);
     CHECK(wantedDocLidLimit <= getDocIdLimit());
-    // Lid space compaction is not in the .idx files, so an image from before it would not replay it.
-    invalidateLidInfoImages(guard);
+    /*
+     * The image on disk stays valid: like the .idx files it holds the entries from before lid space compaction,
+     * which startup brings back. A capture in progress would miss the cleared entries.
+     */
+    abortImageCapture(guard);
     for (size_t i = wantedDocLidLimit; i < _lidInfo.size(); ++i) {
         vespalib::atomic::store_ref_release(_lidInfo[i], LidInfo());
     }
@@ -1306,9 +1329,11 @@ void LogDataStore::setActive(const MonitorGuard& guard, FileId fileId) {
  * holding _updateLock while feeding continues; setLid() and remove() log the value each lid had before they
  * change it, and the image is patched with the first logged value per lid, giving the state at B.
  *
- * Files compacted away, files inserted between existing ones and lid space compaction make an image stale. Those
- * events delete the image (and abort a capture), and the next flush writes a fresh one. Startup also checks the
- * image against the files on disk, and reads all .idx files on any mismatch.
+ * Compaction and lid space compaction abort a capture in progress. The image on disk stays valid during
+ * compaction: a crash leaves the compacted file in place, entries moved to the active file are replayed, and
+ * startup removes an incomplete destination file. Removing the compacted file deletes the image, and compactWorst()
+ * writes a new one right after. Startup also checks the image against the files on disk, and reads all .idx files
+ * on any mismatch.
  */
 
 namespace {
@@ -1400,13 +1425,17 @@ std::map<SerialNum, std::string> LogDataStore::findImageFiles() const {
     return images;
 }
 
-void LogDataStore::invalidateLidInfoImages(const MonitorGuard& guard) {
+void LogDataStore::abortImageCapture(const MonitorGuard& guard) {
     CHECK(hasUpdateLock(guard));
     ++_imageEpoch;
     _imageCapture.reset();
+}
+
+void LogDataStore::removeLidInfoImages(const MonitorGuard& guard) {
+    abortImageCapture(guard);
     if (_useImages) {
         for (const auto& image : findImageFiles()) {
-            LOG(debug, "Removing lid map image '%s'", image.second.c_str());
+            LOG(info, "Removing lid map image '%s'", image.second.c_str());
             fs::remove(fs::path(image.second));
         }
     }

@@ -1272,12 +1272,12 @@ struct ImageFixture {
     MyTlSyncer                    tlSyncer;
     LogDataStore                  store;
 
-    ImageFixture(const std::string& dir, bool useImages)
+    ImageFixture(const std::string& dir, bool useImages, IBucketizer::SP bucketizer = {})
         : executor(1),
           fileHeaderCtx(),
           tlSyncer(),
           store(executor, dir, getBasicConfig(32_Ki).setUseImages(useImages), GrowStrategy(), TuneFileSummary(),
-                fileHeaderCtx, tlSyncer, nullptr) {}
+                fileHeaderCtx, tlSyncer, std::move(bucketizer)) {}
     ~ImageFixture();
     void write(uint32_t lid, uint32_t version) {
         std::string data = genImageTestData(lid, version);
@@ -1322,10 +1322,47 @@ std::string describe(LogDataStore& store) {
     return os.str();
 }
 
-std::string describe_reopened(const std::string& dir, bool useImages, bool expectImage) {
-    ImageFixture f(dir, useImages);
+/*
+ * wantedDocIdLimit mimics proton, which compacts the lid space of the document store to that of the document meta
+ * store when replay is done.
+ */
+std::string describe_reopened(const std::string& dir, bool useImages, bool expectImage,
+                              IBucketizer::SP bucketizer = {}, uint32_t wantedDocIdLimit = 0) {
+    ImageFixture f(dir, useImages, std::move(bucketizer));
     EXPECT_EQ(expectImage, f.store.loaded_lid_info_image());
+    if (wantedDocIdLimit != 0 && wantedDocIdLimit < f.store.getDocIdLimit()) {
+        f.store.compactLidSpace(wantedDocIdLimit);
+    }
     return describe(f.store);
+}
+
+class RewritingVisitor : public IDataStoreVisitor {
+    ImageFixture& _f;
+
+public:
+    explicit RewritingVisitor(ImageFixture& f) : _f(f) {}
+    void visit(uint32_t lid, const void* buffer, size_t sz) override {
+        _f.store.write(_f.store.tentativeLastSyncToken() + 1, lid, buffer, sz);
+    }
+};
+
+class NoProgress : public IDataStoreVisitorProgress {
+public:
+    void updateProgress(double) override {}
+};
+
+void write_bloated_store(ImageFixture& f) {
+    for (uint32_t lid = 1; lid <= 1500; ++lid) {
+        f.write(lid, 0);
+    }
+    for (uint32_t lid = 1; lid <= 300; ++lid) {
+        f.write(lid, 1);
+    }
+    for (uint32_t lid = 400; lid <= 500; lid += 3) {
+        f.remove(lid);
+    }
+    f.flush();
+    EXPECT_EQ(1u, list_lid_info_images(f.store.getBaseDir()).size());
 }
 
 } // namespace
@@ -1446,39 +1483,82 @@ TEST_F(LogDataStoreTest, stale_lid_map_image_is_not_used) {
     std::filesystem::remove_all(dir);
 }
 
-TEST_F(LogDataStoreTest, lid_map_image_is_removed_by_compaction_and_written_again_by_next_flush) {
-    auto dir = build_testdata() + "/image3";
+void verify_image_after_compaction(const std::string& dir, bool dueToBloat) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directory(dir);
-    std::string content;
+    auto bucketizer = dueToBloat ? IBucketizer::SP() : IBucketizer::SP(new DummyBucketizer(50));
+    {
+        ImageFixture f(dir, true, bucketizer);
+        write_bloated_store(f);
+        auto filesBefore = f.store.getAllActiveFiles();
+        if (dueToBloat) {
+            f.store.compactBloat(f.store.tentativeLastSyncToken());
+        } else {
+            f.store.compactSpread(f.store.tentativeLastSyncToken());
+        }
+        EXPECT_NE(filesBefore, f.store.getAllActiveFiles());
+        // Killed right after the compaction, without another flush.
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        for (uint32_t lid = 1000; lid <= 1100; ++lid) {
+            f.write(lid, 2);
+        }
+    }
+    std::string fromImage = describe_reopened(dir, true, true, bucketizer);
+    EXPECT_EQ(describe_reopened(dir, false, false, bucketizer), fromImage);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_is_written_after_bloat_compaction) {
+    verify_image_after_compaction(build_testdata() + "/image3", true);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_is_written_after_spread_compaction) {
+    verify_image_after_compaction(build_testdata() + "/image5", false);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_is_written_after_pruning_visit) {
+    auto dir = build_testdata() + "/image6";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
     {
         ImageFixture f(dir, true);
-        for (uint32_t lid = 1; lid <= 1500; ++lid) {
-            f.write(lid, 0);
-        }
-        for (uint32_t lid = 1; lid <= 300; ++lid) {
-            f.write(lid, 1);
-        }
-        f.flush();
+        write_bloated_store(f);
+        RewritingVisitor visitor(f);
+        NoProgress       progress;
+        f.store.accept(visitor, progress, true);
         EXPECT_EQ(1u, list_lid_info_images(dir).size());
-        f.store.compactLidSpace(1400);
-        EXPECT_EQ(0u, list_lid_info_images(dir).size());
-        f.flush();
-        EXPECT_EQ(1u, list_lid_info_images(dir).size());
-        f.store.compactBloat(f.store.tentativeLastSyncToken());
-        EXPECT_EQ(0u, list_lid_info_images(dir).size());
-        f.write(1600, 0);
-        f.flush();
-        EXPECT_EQ(1u, list_lid_info_images(dir).size());
-        content = describe_content(f.store);
     }
-    /*
-     * A restart from .idx files brings back the entries that compactLidSpace() dropped (lids 1400 to 1500) from
-     * older files, a restart from the image keeps the state the store had.
-     */
-    ImageFixture f(dir, true);
-    EXPECT_TRUE(f.store.loaded_lid_info_image());
-    EXPECT_EQ(content, describe_content(f.store));
+    std::string fromImage = describe_reopened(dir, true, true);
+    EXPECT_EQ(describe_reopened(dir, false, false), fromImage);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_is_used_after_lid_space_compaction) {
+    auto dir = build_testdata() + "/image7";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    {
+        ImageFixture f(dir, true);
+        write_bloated_store(f);
+        f.store.compactLidSpace(1400);
+        // The image holds the entries from before the lid space compaction, as the .idx files do.
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+    }
+    std::string fromImage = describe_reopened(dir, true, true, {}, 1400);
+    EXPECT_EQ(describe_reopened(dir, false, false, {}, 1400), fromImage);
+    {
+        // An image written after lid space compaction holds the compacted lid space.
+        ImageFixture f(dir, true);
+        EXPECT_TRUE(f.store.loaded_lid_info_image());
+        f.store.compactLidSpace(1400);
+        f.write(10, 3);
+        f.write(1300, 3);
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        f.store.compactLidSpace(1301);
+    }
+    fromImage = describe_reopened(dir, true, true, {}, 1301);
+    EXPECT_EQ(describe_reopened(dir, false, false, {}, 1301), fromImage);
     std::filesystem::remove_all(dir);
 }
 
