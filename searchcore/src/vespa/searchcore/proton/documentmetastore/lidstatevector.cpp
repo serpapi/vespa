@@ -4,6 +4,8 @@
 
 #include <vespa/check_require.h>
 
+#include <cstring>
+
 namespace proton {
 
 using vespalib::GenerationHolder;
@@ -45,6 +47,28 @@ void LidStateVector::resizeVector(uint32_t newSize, uint32_t newCapacity) {
             highest = _bv.writer().size() > 0 ? _bv.writer().getPrevTrueBit(_bv.writer().size() - 1) : 0;
             _highest.store(highest, std::memory_order_relaxed);
         }
+    }
+}
+
+void LidStateVector::load_bits(const uint64_t* words, uint32_t num_bits) {
+    auto& bv = _bv.writer();
+    CHECK(num_bits == bv.size());
+    CHECK(bv.countTrueBits() == 0);
+    constexpr uint32_t word_bits = 64;
+    uint32_t           full_words = num_bits / word_bits;
+    memcpy(bv.getStart(), words, full_words * sizeof(uint64_t));
+    // The last partial word also holds guard bits, which belong to the vector, not to the saved bits.
+    for (uint32_t idx = full_words * word_bits; idx < num_bits; ++idx) {
+        if ((words[full_words] >> (idx % word_bits)) & 1u) {
+            bv.setBit(idx);
+        }
+    }
+    _bv.fixup_after_load();
+    if (_trackLowest) {
+        updateLowest(0);
+    }
+    if (_trackHighest && num_bits > 0) {
+        updateHighest(num_bits - 1);
     }
 }
 

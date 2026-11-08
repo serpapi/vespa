@@ -39,6 +39,11 @@ public:
     ~LidStateVector();
 
     void resizeVector(uint32_t newSize, uint32_t newCapacity);
+    /*
+     * Sets the bits of an empty vector of num_bits bits from words saved from another vector of the same size
+     * (memory images). Bits past num_bits in the last word are ignored.
+     */
+    void load_bits(const uint64_t* words, uint32_t num_bits);
     void setBit(unsigned int idx);
     uint32_t assert_not_set_bits(const std::vector<uint32_t>& idxs);
     uint32_t set_bits(const std::vector<uint32_t>& idxs);

@@ -39,6 +39,11 @@ public:
     DocId peekFreeLid(DocId lidLimit);
     void ensureSpace(uint32_t newSize, uint32_t newCapacity);
     void registerLid(DocId lid) { _usedLids.setBit(lid); }
+    /*
+     * Memory images: sets the used lids of a freshly sized allocator from saved bitvector words. As after a
+     * normal load, no lid is active, held or free until populateActiveBuckets() and constructFreeList().
+     */
+    void load_used_lids(const uint64_t* words, uint32_t num_bits);
     void unregisterLid(DocId lid);
     void unregister_lids(const std::vector<DocId>& lids);
     vespalib::MemoryUsage getMemoryUsage() const;
