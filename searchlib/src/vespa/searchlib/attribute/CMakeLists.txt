@@ -41,6 +41,7 @@ vespa_add_library(searchlib_attribute OBJECT
     createsinglefastsearch.cpp
     createsinglestd.cpp
     defines.cpp
+    delta_checkpoint.cpp
     dfa_fuzzy_matcher.cpp
     dfa_string_comparator.cpp
     direct_multi_term_blueprint.cpp

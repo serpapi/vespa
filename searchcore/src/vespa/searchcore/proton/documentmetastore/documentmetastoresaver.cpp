@@ -84,7 +84,9 @@ DocumentMetaStoreSaver::DocumentMetaStoreSaver(GenerationGuard&&                
       _metadataView(metadataView),
       _writeDocSize(true),
       _write_doc_size32(true),
-      _docid_saver(std::move(docid_saver)) {
+      _docid_saver(std::move(docid_saver)),
+      _delta_checkpoints(),
+      _checkpoint_id(0) {
     if (header.getVersion() == documentmetastore::NO_DOCUMENT_SIZE_TRACKING_VERSION) {
         _writeDocSize = false;
     }
@@ -112,6 +114,9 @@ bool DocumentMetaStoreSaver::onSave(IAttributeSaveTarget& saveTarget) {
     std::unique_ptr<search::BufferWriter> datWriter(saveTarget.datWriter().allocBufferWriter());
     _gidIterator.foreach_key(WriteMetadata(*datWriter, _metadataView, _writeDocSize, _write_doc_size32));
     datWriter->flush();
+    if (_delta_checkpoints) {
+        _delta_checkpoints->set_base({get_file_name() + ".dat", _checkpoint_id});
+    }
     return true;
 }
 

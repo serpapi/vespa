@@ -12,8 +12,13 @@
 #include "valuemodifier.h"
 
 #include <vespa/check_require.h>
+#include <vespa/fastos/file.h>
 #include <vespa/searchcommon/attribute/config.h>
 #include <vespa/searchlib/query/query_term_simple.h>
+#include <vespa/searchlib/util/file_with_header.h>
+#include <vespa/searchlib/util/fileutil.h>
+
+#include <algorithm>
 
 namespace search {
 
@@ -40,6 +45,9 @@ template <typename B> void SingleValueNumericAttribute<B>::onCommit() {
         // apply updates
         typename B::ValueModifier valueGuard(this->getValueModifier());
         for (const auto& change : this->_changes.getInsertOrder()) {
+            if (_delta_checkpoints) {
+                _changed_since_full_checkpoint.push_back(change._doc);
+            }
             if (change._type == ChangeBase::UPDATE) {
                 vespalib::atomic::store_ref_relaxed(_data[change._doc], change._data);
             } else if (change._type >= ChangeBase::ADD && change._type <= ChangeBase::DIV) {
@@ -123,6 +131,9 @@ template <typename B> bool SingleValueNumericAttribute<B>::onLoad(vespalib::Exec
 
     this->setCreateSerialNum(attrReader.getCreateSerialNum());
 
+    if (attribute::DeltaCheckpoints::is_delta(attrReader.getDatHeader())) {
+        return onLoadDeltaCheckpoint(attrReader);
+    }
     if (attrReader.getEnumerated()) {
         return onLoadEnumerated(attrReader);
     }
@@ -139,8 +150,68 @@ template <typename B> bool SingleValueNumericAttribute<B>::onLoad(vespalib::Exec
     B::setCommittedDocIdLimit(sz);
     this->set_size_on_disk(attrReader.size_on_disk());
     this->set_last_flush_duration(attrReader.flush_duration());
+    const auto& header = attrReader.getDatHeader();
+    if (header.hasTag(attribute::DeltaCheckpoints::checkpoint_id_tag)) {
+        enable_delta_checkpoints();
+        const auto id = header.getTag(attribute::DeltaCheckpoints::checkpoint_id_tag).asInteger();
+        _delta_checkpoints->set_base({this->getBaseFileName() + ".dat", static_cast<uint64_t>(id)});
+        _changed_since_full_checkpoint.clear();
+    }
 
     return true;
+}
+
+template <typename B> bool SingleValueNumericAttribute<B>::onLoadDeltaCheckpoint(ReaderBase& attrReader) {
+    using attribute::DeltaCheckpoints;
+    const auto&    header = attrReader.getDatHeader();
+    const uint64_t base_id = header.getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger();
+    const size_t   entries = header.getTag(DeltaCheckpoints::delta_entries_tag).asInteger();
+    const uint32_t doc_id_limit = attrReader.getDocIdLimit();
+    // A delta that doesn't match its base can't be repaired from the transaction log, which is pruned up to
+    // this checkpoint: fail loudly.
+    const std::string base_file = this->getBaseFileName() + DeltaCheckpoints::base_suffix;
+    FileWithHeader    base(FileUtil::openFile(base_file));
+    CHECK(base.valid());
+    CHECK(base.header().hasTag(DeltaCheckpoints::checkpoint_id_tag));
+    CHECK(static_cast<uint64_t>(base.header().getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger()) == base_id);
+
+    const size_t base_docs = std::min<size_t>(base.data_size() / sizeof(T), doc_id_limit);
+    getGenerationHolder().reclaim_all();
+    _data.reset();
+    _data.unsafe_reserve(doc_id_limit);
+    _data.unsafe_resize(doc_id_limit);
+    if (base_docs > 0) {
+        FileReader<T>(&base.file()).readNHostOrder(&_data[0], base_docs);
+    }
+    for (uint32_t lid = base_docs; lid < doc_id_limit; ++lid) {
+        _data[lid] = B::defaultValue();
+    }
+
+    FileWithHeader        delta(FileUtil::openFile(this->getBaseFileName() + ".dat"));
+    CHECK(delta.data_size() == entries * (sizeof(uint32_t) + sizeof(T)));
+    std::vector<uint32_t> lids(entries);
+    std::vector<T>        values(entries);
+    FileReader<uint32_t>(&delta.file()).readNHostOrder(lids.data(), entries);
+    FileReader<T>(&delta.file()).readNHostOrder(values.data(), entries);
+    for (size_t i = 0; i < entries; ++i) {
+        CHECK(lids[i] < doc_id_limit);
+        _data[lids[i]] = values[i];
+    }
+
+    B::setNumDocs(doc_id_limit);
+    B::setCommittedDocIdLimit(doc_id_limit);
+    this->set_size_on_disk(attrReader.size_on_disk() + base.size_on_disk());
+    this->set_last_flush_duration(attrReader.flush_duration());
+    enable_delta_checkpoints();
+    _delta_checkpoints->set_base({base_file, base_id});
+    _changed_since_full_checkpoint = std::move(lids);
+    return true;
+}
+
+template <typename B> void SingleValueNumericAttribute<B>::enable_delta_checkpoints() {
+    if (!_delta_checkpoints) {
+        _delta_checkpoints = std::make_shared<attribute::DeltaCheckpoints>();
+    }
 }
 
 template <typename B>
@@ -183,14 +254,49 @@ template <typename B> void SingleValueNumericAttribute<B>::onShrinkLidSpace() {
     CHECK(_data.size() >= committedDocIdLimit);
     _data.shrink(committedDocIdLimit);
     this->setNumDocs(committedDocIdLimit);
+    if (_delta_checkpoints) {
+        // Lids past the new limit that are added again must not read their old values from the base.
+        _delta_checkpoints->clear_base();
+    }
 }
 
 template <typename B>
 std::unique_ptr<AttributeSaver> SingleValueNumericAttribute<B>::onInitSave(std::string_view fileName) {
+    if (_delta_checkpoints) {
+        return initDeltaCheckpointSave(fileName);
+    }
     const uint32_t numDocs(this->getCommittedDocIdLimit());
     CHECK(numDocs <= _data.size());
     return std::make_unique<SingleValueNumericAttributeSaver>(this->createAttributeHeader(fileName), &_data[0],
                                                               numDocs * sizeof(T));
+}
+
+template <typename B>
+std::unique_ptr<AttributeSaver> SingleValueNumericAttribute<B>::initDeltaCheckpointSave(std::string_view fileName) {
+    using attribute::DeltaCheckpointSaver;
+    using attribute::DeltaCheckpoints;
+    // Called by the attribute writer thread, which also records the changed lids.
+    const uint32_t numDocs(this->getCommittedDocIdLimit());
+    CHECK(numDocs <= _data.size());
+    auto& lids = _changed_since_full_checkpoint;
+    std::sort(lids.begin(), lids.end());
+    lids.erase(std::unique(lids.begin(), lids.end()), lids.end());
+    lids.erase(std::lower_bound(lids.begin(), lids.end(), numDocs), lids.end());
+    const DeltaCheckpoints::Base base = _delta_checkpoints->base();
+    const double delta_bytes = lids.size() * double(sizeof(uint32_t) + sizeof(T));
+    if (base.id != 0 && delta_bytes < DeltaCheckpoints::full_ratio() * numDocs * sizeof(T)) {
+        std::vector<T> values(lids.size());
+        for (size_t i = 0; i < lids.size(); ++i) {
+            values[i] = _data[lids[i]];
+        }
+        return DeltaCheckpointSaver::delta(this->createAttributeHeader(fileName), _delta_checkpoints, base, lids.size(),
+                                           {std::as_bytes(std::span(lids)), std::as_bytes(std::span(values))});
+    }
+    // A full checkpoint: deltas are based on it once it is saved, and on nothing until then.
+    _delta_checkpoints->clear_base();
+    lids.clear();
+    return DeltaCheckpointSaver::full(this->createAttributeHeader(fileName), _delta_checkpoints,
+                                      DeltaCheckpoints::make_checkpoint_id(), &_data[0], numDocs * sizeof(T));
 }
 
 template <typename B>

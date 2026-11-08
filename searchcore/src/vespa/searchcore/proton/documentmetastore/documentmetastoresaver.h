@@ -6,6 +6,7 @@
 #include "lid_gid_key_comparator.h"
 
 #include <vespa/searchlib/attribute/attributesaver.h>
+#include <vespa/searchlib/attribute/delta_checkpoint.h>
 #include <vespa/vespalib/btree/btreeiterator.h>
 
 #include <memory>
@@ -37,6 +38,9 @@ private:
     bool                             _writeDocSize;
     bool                             _write_doc_size32;
     std::unique_ptr<DocumentIdSaver> _docid_saver;
+    // Set when this full checkpoint becomes the base of delta checkpoints once saved.
+    std::shared_ptr<search::attribute::DeltaCheckpoints> _delta_checkpoints;
+    uint64_t                                             _checkpoint_id;
 
     bool onSave(search::IAttributeSaveTarget& saveTarget) override;
 
@@ -46,6 +50,11 @@ public:
                            std::unique_ptr<DocumentIdSaver> _docid_saver);
 
     ~DocumentMetaStoreSaver() override;
+
+    void become_delta_checkpoint_base(std::shared_ptr<search::attribute::DeltaCheckpoints> state, uint64_t id) {
+        _delta_checkpoints = std::move(state);
+        _checkpoint_id = id;
+    }
 
     static std::string docid_file_suffix();
 };

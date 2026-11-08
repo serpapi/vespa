@@ -12,6 +12,7 @@
 #include <vespa/searchlib/attribute/attributememorysavetarget.h>
 #include <vespa/searchlib/attribute/attributesaver.h>
 #include <vespa/searchlib/attribute/attributevector.h>
+#include <vespa/searchlib/attribute/delta_checkpoint.h>
 #include <vespa/searchlib/common/create_and_freeze_times.h>
 #include <vespa/searchlib/common/serialnumfileheadercontext.h>
 #include <vespa/searchlib/util/filekit.h>
@@ -165,6 +166,9 @@ FlushableAttribute::FlushableAttribute(AttributeVectorSP attr, const std::shared
       _replay_operation_cost(0.0),
       _paged(_attr->getConfig().paged()) {
     _lastStats.setPathElementsToLog(8);
+    if (search::attribute::DeltaCheckpoints::enabled()) {
+        _attr->enable_delta_checkpoints();
+    }
     auto& config = attr->getConfig();
     if (config.basicType() == search::attribute::BasicType::Type::TENSOR && config.hnsw_index_params().has_value()) {
         _replay_operation_cost =

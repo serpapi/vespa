@@ -10,6 +10,7 @@
 
 #include <vespa/searchcommon/common/growstrategy.h>
 #include <vespa/searchcore/proton/common/subdbtype.h>
+#include <vespa/searchlib/attribute/delta_checkpoint.h>
 #include <vespa/searchlib/common/i_document_id_provider.h>
 #include <vespa/searchlib/docstore/ibucketizer.h>
 #include <vespa/vespalib/datastore/array_store.h>
@@ -24,6 +25,8 @@ class Guard;
 
 namespace proton::documentmetastore {
 class DocIdReader;
+class EntrySource;
+struct LoadedEntry;
 class OperationListener;
 class Reader;
 } // namespace proton::documentmetastore
@@ -108,6 +111,17 @@ private:
     bool                            _should_compact_gid_to_lid_map;
     bool                            _store_full_document_id;
     bool                            _requires_document_ids_from_docstore;
+    // Delta checkpoints (searchlib/attribute/delta_checkpoint.h): lids whose metadata changed or were removed
+    // since the full checkpoint new deltas are based on; may hold duplicates until a save.
+    std::shared_ptr<search::attribute::DeltaCheckpoints> _delta_checkpoints;
+    std::vector<uint32_t>                                _changed_since_full_checkpoint;
+
+    void note_changed(DocId lid) {
+        if (_delta_checkpoints) {
+            _changed_since_full_checkpoint.push_back(lid);
+        }
+    }
+    std::unique_ptr<search::AttributeSaver> init_delta_checkpoint_save(std::string_view fileName);
 
     DocId getFreeLid();
     DocId peekFreeLid();
@@ -153,8 +167,8 @@ private:
     void doRemoveAllOldGenerations() override { reclaim_unused_memory(); }
     vespalib::Generation doGetCurrentGeneration() const override { return getCurrentGeneration(); }
 
-    VESPA_DLL_LOCAL DocId readNextDoc(documentmetastore::Reader& reader, documentmetastore::DocIdReader* docid_reader,
-                                      TreeType::Builder& treeBuilder);
+    VESPA_DLL_LOCAL DocId readNextDoc(const documentmetastore::LoadedEntry& entry, uint32_t docIdLimit,
+                                      documentmetastore::DocIdReader* docid_reader, TreeType::Builder& treeBuilder);
 
     RawDocumentMetadata removeInternal(DocId lid, uint64_t cached_iterator_sequence_id);
     void remove_batch_internal_btree(std::vector<LidAndRawDocumentMetadata>& removed);
@@ -272,6 +286,7 @@ public:
     void compactLidSpace(DocId wantedLidLimit) override;
     void holdUnblockShrinkLidSpace() override;
     bool canShrinkLidSpace() const override;
+    void enable_delta_checkpoints() override;
     void set_operation_listener(std::shared_ptr<documentmetastore::OperationListener> op_listener) override;
 
     SerialNum getLastSerialNum() const override { return getStatus().getLastSyncToken(); }
