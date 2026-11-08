@@ -26,7 +26,9 @@
 #include <vespa/searchlib/util/bufferwriter.h>
 #include <vespa/searchlib/util/disk_space_calculator.h>
 #include <vespa/vespalib/datastore/dynamic_array_buffer_type.h>
+#include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/util/image_file.h>
 
 #include <vespa/vespalib/btree/btree.hpp>
 #include <vespa/vespalib/btree/btreebuilder.hpp>
@@ -36,6 +38,8 @@
 #include <vespa/vespalib/datastore/array_store.hpp>
 #include <vespa/vespalib/datastore/buffer_type.hpp>
 #include <vespa/vespalib/util/type_stable_vector.hpp>
+
+#include <filesystem>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".proton.documentmetastore");
@@ -368,6 +372,12 @@ DocumentMetaStore::DocId DocumentMetaStore::readNextDoc(documentmetastore::Reade
 }
 
 bool DocumentMetaStore::onLoad(vespalib::Executor*) {
+    if (std::filesystem::exists(std::filesystem::path(getBaseFileName() + ".img"))) {
+        // The .dat file next to a memory image holds only a header: loading it would silently drop every document.
+        throw IllegalStateException(make_string("Document meta store '%s' was saved as a memory image, which needs "
+                                                "VESPA_IMAGE_RESTART=1 to load",
+                                                getBaseFileName().c_str()));
+    }
     std::unique_ptr<documentmetastore::DocIdReader> docid_reader;
     if (_store_full_document_id && LoadUtils::file_exists(*this, DocumentMetaStoreSaver::docid_file_suffix())) {
         auto file = LoadUtils::openFile(*this, DocumentMetaStoreSaver::docid_file_suffix());
@@ -423,6 +433,166 @@ bool DocumentMetaStore::onLoad(vespalib::Executor*) {
     update_docid_bytes_stats();
 
     return true;
+}
+
+namespace {
+
+constexpr uint32_t DOCUMENT_META_STORE_IMAGE_MAGIC = 0x444d5331; // "DMS1"
+
+/*
+ * Calls func(bucket_id, state) for each run of documents with the same bucket id in gid order, with the state of
+ * that run as this sub db contributes it to the bucket db. This is the order and grouping onLoad() uses.
+ */
+template <typename Iterator, typename Func>
+void for_each_bucket_state(Iterator itr, const RawDocumentMetadata* metadata, SubDbType sub_db_type, Func&& func) {
+    BucketId    prev;
+    BucketState state;
+    bool        any = false;
+    itr.foreach_key([&](GidToLidMapKey key) {
+        const RawDocumentMetadata& meta = metadata[key.get_lid()];
+        BucketId                   bucket_id = meta.getBucketId();
+        if (any && bucket_id != prev) {
+            func(prev, state);
+            state = BucketState();
+        }
+        prev = bucket_id;
+        any = true;
+        state.add(meta.getGid(), meta.getTimestamp(), meta.getDocSize(), sub_db_type);
+    });
+    if (any) {
+        func(prev, state);
+    }
+}
+
+} // namespace
+
+bool DocumentMetaStore::can_save_image() const {
+    // Document id strings live in an array store whose large array buffers hold owning pointers.
+    return !_store_full_document_id && _gidToLidMap.can_save_image();
+}
+
+/*
+ * Saves what onLoad() would rebuild: the metadata vector and the gid to lid b-tree are saved as memory images, the
+ * used lids as bitvector words, and this sub db's bucket states in the metadata stream. As with a normal save,
+ * held, free and active lids are not saved: they are rebuilt by populateActiveBuckets() and constructFreeList().
+ * Called on the writer thread right after a commit, so the b-tree is frozen.
+ */
+void DocumentMetaStore::save_image(vespalib::image::ImageWriter& writer) {
+    auto& meta = writer.meta();
+    meta << DOCUMENT_META_STORE_IMAGE_MAGIC << uint32_t(_subDbType) << uint8_t(_trackDocumentSizes)
+         << uint8_t(_track_32bit_document_sizes);
+    _metadataStore.save_image(writer);
+    _gidToLidMap.save_image(writer);
+    const auto& used_lids = _lidAlloc.getUsedLids();
+    uint32_t    used_lids_size = used_lids.size();
+    auto        used_lids_section =
+        writer.write_section(used_lids.getStart(), search::BitVector::num_bytes_plain(used_lids_size));
+    meta << used_lids_size << used_lids_section;
+    save_image_bucket_states(meta);
+}
+
+void DocumentMetaStore::save_image_bucket_states(vespalib::nbostream& os) const {
+    std::vector<std::pair<BucketId, BucketState>> states;
+    for_each_bucket_state(_gidToLidMap.getFrozenView().begin(), get_unbound_metadata_view(), _subDbType,
+                          [&states](const BucketId& bucket_id, const BucketState& state) {
+                              states.emplace_back(bucket_id, state);
+                          });
+    os << uint32_t(BucketState::getChecksumType()) << uint64_t(states.size());
+    for (const auto& [bucket_id, state] : states) {
+        os << uint64_t(bucket_id.getRawId());
+        state.serialize(os);
+    }
+}
+
+void DocumentMetaStore::load_image(vespalib::image::ImageReader& reader) {
+    auto&    meta = reader.meta();
+    uint32_t magic = 0;
+    uint32_t sub_db_type = 0;
+    uint8_t  track_document_sizes = 0;
+    uint8_t  track_32bit_document_sizes = 0;
+    meta >> magic >> sub_db_type >> track_document_sizes >> track_32bit_document_sizes;
+    if (magic != DOCUMENT_META_STORE_IMAGE_MAGIC) {
+        throw IllegalStateException(
+            make_string("'%s' is not a document meta store memory image", reader.path().c_str()));
+    }
+    if (sub_db_type != uint32_t(_subDbType) || bool(track_document_sizes) != _trackDocumentSizes ||
+        bool(track_32bit_document_sizes) != _track_32bit_document_sizes || _store_full_document_id)
+    {
+        throw IllegalStateException(make_string("Document meta store memory image '%s' was saved with another "
+                                                "configuration (sub db type %u, document sizes %u/%u)",
+                                                reader.path().c_str(), sub_db_type, track_document_sizes,
+                                                track_32bit_document_sizes));
+    }
+    unload();
+    CHECK(getNumUsedLids() == 0);
+    _metadataStore.load_image(reader);
+    if (_metadataStore.size() == 0) {
+        throw IllegalStateException(make_string("Document meta store memory image '%s' has no lid 0",
+                                                reader.path().c_str()));
+    }
+    _gidToLidMap.load_image(reader);
+    _gid_to_lid_map_write_itr_prepare_serial_num = 0u;
+    _gid_to_lid_map_write_itr.begin(_gidToLidMap.getRoot());
+    _gidToLidMap.getAllocator().freeze();
+    _gidToLidMap.getAllocator().assign_generation(getGenerationHandler().getCurrentGeneration());
+
+    _lidAlloc.ensureSpace(_metadataStore.size(), _metadataStore.capacity());
+    uint32_t              used_lids_size = 0;
+    vespalib::image::Section used_lids_section;
+    meta >> used_lids_size >> used_lids_section;
+    if (used_lids_size != _metadataStore.size() ||
+        used_lids_section.length != search::BitVector::num_bytes_plain(used_lids_size))
+    {
+        throw IllegalStateException(make_string("Document meta store memory image '%s' has %u used lid bits for %zu "
+                                                "lids",
+                                                reader.path().c_str(), used_lids_size, _metadataStore.size()));
+    }
+    {
+        auto used_lids = reader.map(used_lids_section, used_lids_section.length, nullptr);
+        _lidAlloc.load_used_lids(static_cast<const uint64_t*>(used_lids.get()), used_lids_size);
+    }
+    load_image_bucket_states(meta);
+
+    _requires_document_ids_from_docstore = false;
+    _requires_doc_sizes_from_docstore = false;
+    DiskSpaceCalculator calc;
+    set_size_on_disk(DiskSpaceCalculator::directory_placeholder_size() +
+                     calc(std::filesystem::file_size(std::filesystem::path(reader.path()))) +
+                     calc(std::filesystem::file_size(std::filesystem::path(getBaseFileName() + ".dat"))));
+    update_docid_bytes_stats();
+}
+
+void DocumentMetaStore::load_image_bucket_states(vespalib::nbostream& is) {
+    uint32_t checksum_type = 0;
+    uint64_t num_states = 0;
+    is >> checksum_type >> num_states;
+    bool usable = (checksum_type == uint32_t(BucketState::getChecksumType()));
+    {
+        auto guard = _bucketDB->takeGuard();
+        for (uint64_t i = 0; i < num_states; ++i) {
+            uint64_t    raw_bucket_id = 0;
+            BucketState state;
+            is >> raw_bucket_id;
+            state.deserialize(is);
+            if (usable) {
+                guard->add(BucketId(raw_bucket_id), state);
+            }
+        }
+    }
+    if (!usable) {
+        LOG(warning, "Document meta store '%s': bucket checksum type changed since the memory image was saved, "
+                     "rebuilding bucket states from all documents",
+            getBaseFileName().c_str());
+        rebuild_bucket_states();
+    }
+}
+
+void DocumentMetaStore::rebuild_bucket_states() {
+    auto guard = _bucketDB->takeGuard();
+    for_each_bucket_state(_gidToLidMap.getFrozenView().begin(), get_unbound_metadata_view(), _subDbType,
+                          [&guard](const BucketId& bucket_id, const BucketState& state) {
+                              guard->add(bucket_id, state);
+                          });
 }
 
 template <typename TreeView>

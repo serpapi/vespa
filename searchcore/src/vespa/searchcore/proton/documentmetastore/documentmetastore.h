@@ -22,6 +22,10 @@ class JoinBucketsSession;
 class Guard;
 } // namespace proton::bucketdb
 
+namespace vespalib {
+class nbostream;
+}
+
 namespace proton::documentmetastore {
 class DocIdReader;
 class OperationListener;
@@ -133,6 +137,12 @@ private:
     void reclaim_memory(vespalib::Generation oldest_used_gen) override;
     std::unique_ptr<search::AttributeSaver> onInitSave(std::string_view fileName) override;
     bool onLoad(vespalib::Executor* executor) override;
+    bool can_save_image() const override;
+    void save_image(vespalib::image::ImageWriter& writer) override;
+    void load_image(vespalib::image::ImageReader& reader) override;
+    void save_image_bucket_states(vespalib::nbostream& os) const;
+    void load_image_bucket_states(vespalib::nbostream& is);
+    void rebuild_bucket_states();
 
     template <typename TreeView>
     typename TreeView::Iterator lowerBound(const BucketId& bucketId, const TreeView& treeView) const;
