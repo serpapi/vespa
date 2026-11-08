@@ -32,6 +32,7 @@
 #include <vespa/vespalib/util/cpu_usage.h>
 
 #include <mutex>
+#include <thread>
 #include <shared_mutex>
 
 namespace vespalib {
@@ -146,6 +147,7 @@ private:
     bool                                                  _abortInit;
     bool                                                  _initStarted;
     bool                                                  _initComplete;
+    std::thread _serve_during_replay_thread;
     bool                                                  _initDocumentDbsInSequence;
     bool                                                  _has_shut_down_config_and_state_components;
     std::shared_ptr<IDocumentDBReferenceRegistry>         _documentDBReferenceRegistry;

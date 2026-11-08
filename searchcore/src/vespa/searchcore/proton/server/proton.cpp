@@ -1,6 +1,7 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "proton.h"
+#include "serve_during_replay.h"
 
 #include "disk_mem_usage_sampler.h"
 #include "document_db_explorer.h"
@@ -466,7 +467,18 @@ void Proton::init(const BootstrapConfig::SP& configSnapshot) {
     _customComponentRootToken = _stateServer->repo().add_root_resource(CUSTOM_COMPONENT_API_PATH);
 
     _executor.sync();
-    waitForOnlineState();
+    if (serve_during_replay()) {
+        // Go online on the loaded state now; replay continues in the document db master threads. Flushing
+        // starts once every document db is online, as it does without this option.
+        LOG(info, "Serving during transaction log replay");
+        _serve_during_replay_thread = std::thread([this]() {
+            waitForOnlineState();
+            LOG(info, "All document dbs online after serving during replay");
+            _flushEngine->start();
+        });
+    } else {
+        waitForOnlineState();
+    }
     if (replay_throttle_policy.get_params() && (replay_throttle_policy.get_params()->resource_usage_soft_limit > 0)) {
         LOG(info,
             "Estimated maximum memory usage during transaction log replay was %" PRIu64
@@ -476,7 +488,9 @@ void Proton::init(const BootstrapConfig::SP& configSnapshot) {
     }
     _rpcHooks->set_online();
 
-    _flushEngine->start();
+    if (!serve_during_replay()) {
+        _flushEngine->start();
+    }
     vespalib::duration pruneSessionsInterval =
         vespalib::from_s(protonConfig.grouping.sessionmanager.pruning.interval);
     _sessionPruneHandle = _scheduler->scheduleAtFixedRate(
@@ -547,6 +561,9 @@ Proton::addDocumentDB(const DocTypeName& docTypeName, document::BucketSpace buck
 }
 
 Proton::~Proton() {
+    if (_serve_during_replay_thread.joinable()) {
+        _serve_during_replay_thread.join();
+    }
     CHECK(_initStarted);
     if (!_initComplete) {
         LOG(warning, "Initialization of proton was halted. Shutdown sequence has been initiated.");

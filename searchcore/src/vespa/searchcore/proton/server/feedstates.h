@@ -6,7 +6,9 @@
 #include "feedstate.h"
 #include "ireplaypackethandler.h"
 #include "packetwrapper.h"
+#include "serve_during_replay.h"
 
+#include <vespa/persistence/spi/result.h>
 #include <vespa/searchcore/proton/common/commit_time_tracker.h>
 
 namespace proton {
@@ -52,7 +54,15 @@ public:
                               IIncSerialNum&                                      inc_serial_num);
 
     ~ReplayTransactionLogState() override;
-    void handleOperation(FeedToken, FeedOperationUP op) override {
+    void handleOperation(FeedToken token, FeedOperationUP op) override {
+        if (serve_during_replay()) {
+            if (token) {
+                token->setResult(std::make_unique<storage::spi::Result>(storage::spi::Result::ErrorType::TRANSIENT_ERROR,
+                                                                        "Transaction log replay in progress"),
+                                 false);
+            }
+            return;
+        }
         throwExceptionInHandleOperation(_doc_type_name, *op);
     }
 

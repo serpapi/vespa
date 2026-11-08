@@ -1,6 +1,7 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "documentdb.h"
+#include "serve_during_replay.h"
 
 #include "bootstrapconfig.h"
 #include "combiningfeedview.h"
@@ -343,6 +344,12 @@ void DocumentDB::enterOnlineState() {
     _feedView.get()->forceCommitAndWait(CommitParam(_feedHandler->getSerialNum(), CommitParam::UpdateStats::SKIP));
 
     (void)_state->enterOnlineState();
+    if (serve_during_replay()) {
+        // The service layer read bucket info while replay was still changing it; have it fetch every bucket again.
+        for (const auto& bucket : _subDBs.getBucketDB().takeGuard()->getBuckets()) {
+            static_cast<IBucketModifiedHandler&>(_clusterStateHandler).notifyBucketModified(bucket);
+        }
+    }
     // Consider delayed pruning of transaction log and config history
     _feedHandler->considerDelayedPrune();
     performStartMaintenance();
