@@ -17,9 +17,9 @@ spot in the greenfield-bench VPC, terminated and verified; ~$8.
 | Cheapest restart wins | `<initialize><threads>` = cores (37 -> 17 s here); `match: cased` on `content_hash`/`path`; crash-only stop | §5 |
 | Restart by design | bounded TLS tail via O(delta) checkpoints for every target: tiered fusion (prototyped), delta attribute/meta-store checkpoints (designed), load-by-map | §6 |
 
-Hypotheses: H1 pass; H2 half falsified (not I/O bound, but not decode bound either); H3 pass (sim); H4 **not
-tested as preregistered** (no prototype bounds the attribute checkpoints yet, so no "restart <= load + 60 s at the
-worst point" run); H5 fails the 5x bound at this node's scale (2.5-3.2x), passes correctness.
+Hypotheses: H1 pass; H2 half falsified (not I/O bound, but not decode bound either); H3 pass (sim); H4 (§8.3)
+restart passes (58.5 s vs load + 60 = 94.4 s) and bytes fail (1.48x stock vs 1.1x, as preregistered:
+string/multi-value attributes still write full snapshots); H5 fails the 5x bound at this node's scale (2.5-3.2x), passes correctness.
 
 ## 1. Fork brought to bleeding edge
 
@@ -342,25 +342,87 @@ which counts chunks already queued for compression and write. A flush can't free
 strategy picks the same target again and the flush engine logs the warning and waits 100 ms. Each such flush took
 0-8 ms. Benign, stock behaviour; a fix would subtract queued chunks from the gain. Not done here.
 
-### 8.2 INTERIM (2026-11-08 14:55Z): the stall fix on the i8g run
+### 8.2 The stall fix on a fresh i8g.4xlarge
 
-**INTERIM.** One arm is final and one is partial; the rest of the run is still going. Same i8g.4xlarge node
-(`i-0f1da773f3ac64eef`), the same 50M snapshot restored for each arm, and the same app-ab with 50 qps of open-loop
-queries while 30M documents are re-put. Latency is measured from the scheduled send time; the timeout is 2 s.
+Each arm restores the same 50M snapshot on node `i-0f1da773f3ac64eef` and uses app-ab. Queries run open loop at 50 qps
+while 30M documents are re-put, with latency measured from the scheduled send time and a 2 s timeout. "During
+feed" means from feed.start to feed.end; the fusion columns run to settle.end, so they include fusions that finish
+after the feed.
 
-| arm | status | feed, min | queries | p50 | p99 | max | timeouts/errors | queries > 700 ms | of those, within 1 s after a fusion completed | fusions completed | proton write_bytes |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| ab-stock-q2 (stock 8.781.11) | final | 67 | 200,400 | 126 ms | 358 ms | 1,816 ms | 0 | 8 | **8** (all +0.70-0.76 s) | 8 | 342.7 GB (11.4 KB per re-put) |
-| ab-fix-q (stock + async index removal) | partial, 59 of ~67 min | 59 | 173,793 | 98 ms | 276 ms | **659 ms** | 0 | **0** | 0 | 7 | pending |
+| arm | build | feed, min | queries | p50 | p99 | max | timeouts/errors | queries > 700 ms | worst query within ±2 s of each full-fusion completion | proton write_bytes |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ab-stock-q2 | stock 8.781.11 | 67 | 200,400 | 126 ms | 358 ms | 1,816 ms | 0 | 8, all sent +0.70-0.76 s after `fusion.complete` | 10 fusions: 706-1,816 ms (median 1,483) | 342.7 GB (11.4 KB/re-put) |
+| ab-fix-q | stock + async index removal | 59 | 176,786 | 98 ms | 276 ms | 659 ms | 0 | **0** | 9 fusions: 191-659 ms (median 485) | 319.0 GB (10.6 KB/re-put) |
+| ab-fixtiered-q | tiered + async index removal (`h4` build, `VESPA_TIERED_FUSION=1`) | 82 | 246,750 | 44 ms | 129 ms | 494 ms | 0 | **0** | 2 fusions: 416, 494 ms; 43 intermediate fusions: 110-176 ms | 209.8 GB (7.0 KB/re-put) |
 
-This reproduces §8.1 on a fresh node: stock stalls exactly one query per full fusion, each sent ~0.73 s after
-`fusion.complete`, at 0.9-1.8 s. With the fix, no query reached 700 ms across 7 full fusions.
+The fixed query set (`arms.sh check`) gives byte-identical hit counts in all three arms.
 
-Still to come:
-- ab-fix-q final, around 15:10Z;
-- ab-fixtiered-q (tiered fusion plus the fix), around 16:25Z;
-- the three H4 arms (h4-stock, h4-stock-tls1g, h4-proto), with restart time and flush+fusion bytes by group, around 20:30Z.
+This reproduces §8.1 on a fresh node: stock stalls one query per full fusion, sent ~0.73 s after `fusion.complete`.
+With the fix, no query reached 700 ms in 11 full fusions across the two fix arms. The p50 differences between arms
+are larger than the fix alone explains: the tiered arm searches fewer disk indexes. Because the arms ran one after
+another on the same node, page-cache state also differs. Only the stall columns are attributed to the fix.
 
-The H4 arms run one after another on this node. Running them in parallel on extra nodes was not approved in this
-session, and the H4 preregistration requires at least 50 minutes of feed per arm. H4 write amplification is
-therefore not measured yet.
+### 8.3 H4: SIGKILL at the worst point of a steady feed
+
+This follows the 2026-11-08 PREREG amendment. Each arm has its own i8g.4xlarge with the same AMI
+(`ami-0951c836c26e34fc8`), restored from the same 50M snapshot. The three nodes ran in parallel, with the
+owner's approval, to finish the run sooner.
+- Feed: 5k re-puts/s, plus 1k/s partial updates on ids [48M, 50M).
+- Kill: SIGKILL after at least 50 min of feed, at the first poll where the transaction log is at 90 % or more of
+  its feed maximum.
+- Bytes: proton's `vfs_write` grouped by path (bpftrace), as GB per hour of feed.
+
+| | h4-stock (20 GiB TLS) | h4-stock-tls1g (stock, 1 GiB TLS) | h4-proto (tiered + delta, 1 GiB TLS) |
+|---|---|---|---|
+| feed until SIGKILL, min | 50 | 54 | 52 |
+| TLS at kill | 11.2 GB | 1.03 GB | 1.01 GB |
+| SIGKILL -> started, s | 195.0 | 67.6 | **58.5** |
+| component load (init), s | 32.7 | 36.9 | 34.4 |
+| ops replayed / replay s | 18.0M / 143.5 | 1.71M / 28.3 | 1.62M / 21.8 |
+| **restart <= load + 60 s** | fail | pass | **pass** |
+| attribute, plain numeric, GB/h | 0.0 | 30.1 | **16.7** |
+| document meta store, GB/h | 0.0 | 15.6 | **7.0** |
+| attribute, string/multi-value/fast-search, GB/h | 0.0 | 36.8 | 38.3 |
+| document store, GB/h | 26.9 | 27.1 | 26.4 |
+| index flush, GB/h | 7.7 | 7.9 | 8.0 |
+| index fusion (+ intermediate), GB/h | 49.8 | 59.3 | 24.1 + 4.4 |
+| **flush + fusion, GB/h** | **84.4** | **176.7** | **124.8** |
+| vs h4-stock (the preregistered baseline) | 1.00x | 2.09x | **1.48x** |
+| **bytes <= 1.1x stock** | | fail | **fail** |
+| vs h4-stock-tls1g | | 1.00x | 0.71x |
+| transaction log, GB/h | 13.4 | 13.1 | 13.4 |
+| proton write_bytes (/proc), GB/h | 139.0 | 229.9 | 179.9 |
+
+**H4 result:**
+- **Restart passes.** h4-proto: 58.5 s from SIGKILL to started, against 34.4 + 60 = 94.4 s. The stock 20 GiB arm
+  replays 18M ops in 143 s and fails.
+- **Bytes fail.** h4-proto writes 1.48x stock's flush+fusion bytes, against a bound of 1.1x. The preregistration
+  predicted this failure. Stock with a 20 GiB TLS writes no attribute or meta store snapshots at all in 50 min, so
+  any bounded transaction log costs snapshot bytes.
+
+What the prototypes buy is the price of a bounded log. Against stock with the same 1 GiB TLS:
+- delta checkpoints cut plain-numeric attribute bytes by 45 % (30.1 to 16.7 GB/h) and meta store bytes by 55 %
+  (15.6 to 7.0);
+- tiered fusion cuts fusion bytes by 52 % (59.3 to 28.5).
+
+Together that is 0.71x. The remaining excess over stock is string, multi-value and fast-search attributes
+(38.3 GB/h), which still write full snapshots. They are the next O(delta) target. Without them, h4-proto would
+be at 86.5 GB/h, 1.02x stock.
+
+Correctness:
+- Filter counts on 16 attribute predicates match between h4-stock and h4-proto, including the three
+  updated-only values `price >= 1000`, `status = 7` and `boost >= 2` (2,000,239 / 2,000,000 / 2,000,000).
+  So the delta-restored attributes and the meta store reproduce the fed state.
+- h4-stock-tls1g's first post-restart count saw 22.7M of 50M documents, because coverage was still partial.
+  `h4.sh` waits for a `totalCount`, not for full coverage, which is a harness weakness. Re-running the same 16
+  queries at 100 % coverage matches the other arms exactly (`attribute-hits-recheck.txt`).
+- `arms.sh check` on h4-proto matches the A/B arms' hit counts.
+
+Raw data: `s3://si-greenfield-bench-524519922011/vespa-fork-restart/runs/fr2/` (`boxA/` for the A/B arms, `h4/`
+for the H4 nodes). The snapshot is at `.../snap/fr2-50m.tar` (67 GB).
+
+AWS for this follow-up, all in the greenfield-bench VPC, terminated and verified, about $15 in total:
+- two c8gd.16xlarge spot compile boxes, about 1.0 h together;
+- one i8g.4xlarge spot node, reclaimed after the load (1.6 h);
+- one i8g.4xlarge on-demand node for the A/B arms (5.2 h);
+- three i8g.4xlarge on-demand nodes for the H4 arms (1.6 h each).
