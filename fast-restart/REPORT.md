@@ -416,7 +416,12 @@ Correctness:
 - h4-stock-tls1g's first post-restart count saw 22.7M of 50M documents, because coverage was still partial.
   `h4.sh` waits for a `totalCount`, not for full coverage, which is a harness weakness. Re-running the same 16
   queries at 100 % coverage matches the other arms exactly (`attribute-hits-recheck.txt`).
-- `arms.sh check` on h4-proto matches the A/B arms' hit counts.
+- **Open:** `arms.sh check` on h4-proto differs from the A/B arms by one document on one of 10 terms:
+  `body contains "yvbpqpk"` gives 566,883 vs 566,884. The other 9 queries, including `true` (50,000,000), match.
+  h4-stock did not run `arms.sh check`, so there is no stock SIGKILL control, and the nodes are gone. A lost index
+  posting after replay (tiered fusion or the TLS cut) is not ruled out. It must be reproduced from
+  `snap/fr2-50m.tar` with the check in both kill arms, then the missing document found by id, before the delta and
+  tiered builds go anywhere near production.
 
 Raw data: `s3://si-greenfield-bench-524519922011/vespa-fork-restart/runs/fr2/` (`boxA/` for the A/B arms, `h4/`
 for the H4 nodes). The snapshot is at `.../snap/fr2-50m.tar` (67 GB).
