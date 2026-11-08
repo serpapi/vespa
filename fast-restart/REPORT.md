@@ -298,3 +298,69 @@ Two things this design deliberately does not do:
   cache warm because the big index is rewritten ~1/day instead of ~5/day, and the intermediate indexes are small
   and recently written. The `search.mmap.advise=SEQUENTIAL` default (no LRU protection on Linux 6.1+, see
   `ISSUE_DRAFT.md`) should be `NORMAL` for posting files.
+
+## 8. Follow-up (2026-11-08): the full-fusion stall, delta checkpoints and H4
+
+New branches on `serpapi/vespa`, each on `serpapi-8.781.11`:
+
+| branch | what | tests |
+|---|---|---|
+| `serpapi-8.781.11-async-index-removal` | old disk indexes removed by a per-index-maintainer remover thread, never by the thread dropping the last reference | new `indexmanager_test` case; the 4 index test programs pass; 0 failures in 40 sequential runs |
+| `serpapi-8.781.11-delta-checkpoints` | delta checkpoints for plain single-value numeric attributes and the document meta store (`VESPA_DELTA_ATTRIBUTE_CHECKPOINTS=1`) | new `searchlib_delta_checkpoint_test_app` (7 cases), 3 new document meta store cases (57/57 pass); attribute, attribute flush and initializer suites pass |
+| `serpapi-8.781.11-fast-restart-h4` | test build only: tiered fusion + the two above (merges) | the above plus the tiered fusion tests: 0 failures in 60 runs |
+
+### 8.1 Why tiered fusion timed out 2 queries at full fusion completion
+
+Cause: `DiskIndexWithDestructorCleanup`'s destructor runs `DiskIndexCleaner::removeOldIndexes()`, an `rm -rf` of
+every old index directory, on whichever thread drops the last reference to an old index. After a full fusion that
+is usually a query that was running on the old index collection when `doneFusion` swapped in the new one: the
+query deletes the old fused index and the merged inputs before its reply goes out. Stock code, not tiered code.
+
+Evidence (the first A/B's raw data, `runs/fast-restart-out.tgz`):
+
+| arm | queries | full fusions | queries > 700 ms | of those, within 1 s after a full fusion completed | slowest | deleted per full fusion |
+|---|---|---|---|---|---|---|
+| stock -q | 207,926 | 8 (in log retention) | 8 | **8** | 1.16-1.67 s | 20.7 GB fused + 2.0-2.3 GB flushed |
+| tiered -q | 190,326 | 2 | 2 | **2** | 2.0 s (timeout) | 20.7 GB fused + 5.2 GB flushed/intermediate |
+
+So stock 8.781.11 also stalls one query per full fusion, just under the 2 s timeout; tiered fusion deletes ~3 GB
+more of recently written (page-cached) data per full fusion and crosses it. The stalled stock query is the one sent
+~0.7 s after `fusion.complete`, which is when stock's `doneFusion` finishes its 50M-lid selector clone and swaps;
+with the FX-D clone in the fork the swap is immediate and the stalled tiered queries were sent 4 ms and 55 ms
+before `fusion.complete`. Every other query in both arms stayed under 700 ms.
+
+Fix (`serpapi-8.781.11-async-index-removal`): each `IndexMaintainer` owns a one-thread index remover; disk index
+wrappers schedule the cleanup there (still under the remove lock), and the remover drains at shutdown. The unit
+test blocks the remover, drops the last reference from the test thread and checks the directory is still there
+until the remover runs. Production relevance (not measured): a production full fusion deletes a ~930 GB fused
+index; whichever query holds the last reference waits for that.
+
+The 9 "`webpage.0.ready.summary.flush` has been asked to flush again" warnings (only in tiered -q, at t = 785,
+949 and 1,995 s, none at the timeouts): the document store's memory gain is `WriteableFileChunk::getMemoryFootprint`,
+which counts chunks already queued for compression and write. A flush can't free those, so while the writer lags
+(median summary memory 1.18 GB in tiered -q vs 0.86 GB in stock -q; 137 vs 49 summary flushes) the memory
+strategy picks the same target again and the flush engine logs the warning and waits 100 ms. Each such flush took
+0-8 ms. Benign, stock behaviour; a fix would subtract queued chunks from the gain. Not done here.
+
+### 8.2 INTERIM (2026-11-08 14:55Z): the stall fix on the i8g run
+
+**INTERIM.** One arm is final and one is partial; the rest of the run is still going. Same i8g.4xlarge node
+(`i-0f1da773f3ac64eef`), the same 50M snapshot restored for each arm, and the same app-ab with 50 qps of open-loop
+queries while 30M documents are re-put. Latency is measured from the scheduled send time; the timeout is 2 s.
+
+| arm | status | feed, min | queries | p50 | p99 | max | timeouts/errors | queries > 700 ms | of those, within 1 s after a fusion completed | fusions completed | proton write_bytes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ab-stock-q2 (stock 8.781.11) | final | 67 | 200,400 | 126 ms | 358 ms | 1,816 ms | 0 | 8 | **8** (all +0.70-0.76 s) | 8 | 342.7 GB (11.4 KB per re-put) |
+| ab-fix-q (stock + async index removal) | partial, 59 of ~67 min | 59 | 173,793 | 98 ms | 276 ms | **659 ms** | 0 | **0** | 0 | 7 | pending |
+
+This reproduces §8.1 on a fresh node: stock stalls exactly one query per full fusion, each sent ~0.73 s after
+`fusion.complete`, at 0.9-1.8 s. With the fix, no query reached 700 ms across 7 full fusions.
+
+Still to come:
+- ab-fix-q final, around 15:10Z;
+- ab-fixtiered-q (tiered fusion plus the fix), around 16:25Z;
+- the three H4 arms (h4-stock, h4-stock-tls1g, h4-proto), with restart time and flush+fusion bytes by group, around 20:30Z.
+
+The H4 arms run one after another on this node. Running them in parallel on extra nodes was not approved in this
+session, and the H4 preregistration requires at least 50 minutes of feed per arm. H4 write amplification is
+therefore not measured yet.
