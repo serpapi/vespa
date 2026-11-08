@@ -57,6 +57,8 @@ public:
         : DynamicArrayBufferType(array_size, spec, std::move(memory_allocator)) {}
     ~DynamicArrayBufferType() override;
     void destroy_entries(void* buffer, EntryCount num_entries) override;
+    // Entries are a size prefix followed by elements, in place.
+    bool image_copyable() const noexcept override { return image::image_copyable_v<ElemT>; }
     void fallback_copy(void* new_buffer, const void* old_buffer, EntryCount num_entries) override;
     void initialize_reserved_entries(void* buffer, EntryCount reserved_entries) override;
     void clean_hold(void* buffer, size_t offset, EntryCount num_entries, CleanContext cleanCxt) override;

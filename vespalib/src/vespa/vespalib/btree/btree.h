@@ -47,12 +47,12 @@ public:
     // Memory images (vespalib/util/image_file.h). Writer only, right after a freeze.
     bool can_save_image() const noexcept { return _tree.isFrozen() && _alloc.can_save_image(); }
     void save_image(image::ImageWriter& writer) {
-        _tree.save_image_root(writer.meta());
         _alloc.save_image(writer);
+        _tree.save_image_root(writer.meta());
     }
     void load_image(image::ImageReader& reader) {
-        _tree.load_image_root(reader.meta());
         _alloc.load_image(reader);
+        _tree.load_image_root(reader.meta());
     }
     void assign(Builder& rhs) { _tree.assign(rhs, _alloc); }
     bool insert(const KeyType& key, const DataType& data, CompareT comp = CompareT()) {

@@ -59,7 +59,10 @@ public:
                _internalHoldUntilFreeze.empty() && _leafHoldUntilFreeze.empty() && _nodeStore.can_save_image();
     }
     bool save_image(image::ImageWriter& writer) { return can_save_image() && _nodeStore.save_image(writer); }
-    void load_image(image::ImageReader& reader) { _nodeStore.load_image(reader); }
+    void load_image(image::ImageReader& reader) {
+        freeze(); // nodes of the structure being replaced must be frozen before their buffers are dropped
+        _nodeStore.load_image(reader);
+    }
 
     /**
      * Allocate internal node.

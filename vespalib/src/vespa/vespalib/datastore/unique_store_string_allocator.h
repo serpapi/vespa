@@ -80,6 +80,10 @@ public:
                                         std::shared_ptr<vespalib::alloc::MemoryAllocator> memory_allocator);
     ~UniqueStoreExternalStringBufferType() override;
     void clean_hold(void* buffer, size_t offset, EntryCount num_entries, CleanContext cleanCtx) override;
+    bool image_serializable() const noexcept override { return true; }
+    void save_image_entries(const void* buffer, EntryCount num_entries, image::ImageWriter& writer) const override;
+    void load_image_entries(void* buffer, EntryCount num_entries, EntryCount reserved_entries,
+                            image::ImageReader& reader) override;
     const vespalib::alloc::MemoryAllocator* get_memory_allocator() const override;
 };
 

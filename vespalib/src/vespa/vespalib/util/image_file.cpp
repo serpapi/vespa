@@ -222,4 +222,20 @@ Alloc ImageReader::map(Section section, size_t capacity, const MemoryAllocator* 
     return Alloc::adopt(wrapper, PtrAndSize(p, capacity));
 }
 
+void ImageReader::read(Section section, void* dst) const {
+    char*    p = static_cast<char*>(dst);
+    uint64_t done = 0;
+    while (done < section.length) {
+        ssize_t n = ::pread(_fd, p + done, section.length - done, section.offset + done);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            throw IllegalStateException(make_string("Cannot read image '%s' section at %lu", _path.c_str(),
+                                                    section.offset));
+        }
+        done += n;
+    }
+}
+
 } // namespace vespalib::image

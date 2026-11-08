@@ -496,8 +496,32 @@ void DataStoreBase::merge_stash_memory_usage(vespalib::MemoryUsage& usage) const
 
 
 namespace {
-constexpr uint32_t DATASTORE_IMAGE_MAGIC = 0x44534931; // "DSI1"
+
+constexpr uint32_t DATASTORE_IMAGE_MAGIC = 0x44534932; // "DSI2"
+
+// How a buffer is saved in a memory image.
+enum class ImageMode : uint8_t {
+    MAPPED = 0,     // raw bytes, mapped on load
+    FRESH = 1,      // no live entries and a type that cannot be mapped: a new empty buffer on load
+    SERIALIZED = 2, // the buffer type writes and rebuilds its entries
+};
+
+ImageMode image_mode(const BufferState& state) noexcept {
+    const BufferTypeBase* type_handler = state.getTypeHandler();
+    if (type_handler->image_copyable() && state.stats().extra_used_bytes() == 0) {
+        return ImageMode::MAPPED;
+    }
+    if (type_handler->image_serializable()) {
+        return ImageMode::SERIALIZED;
+    }
+    return ImageMode::FRESH;
 }
+
+bool has_live_entries(const BufferState& state) noexcept {
+    return state.size() > state.stats().dead_entries() + state.stats().hold_entries();
+}
+
+} // namespace
 
 bool DataStoreBase::can_save_image() const noexcept {
     uint32_t buffer_id_limit = _bufferIdLimit.load(std::memory_order_relaxed);
@@ -506,9 +530,10 @@ bool DataStoreBase::can_save_image() const noexcept {
         if (state == nullptr || !state->isActive()) {
             continue;
         }
-        if (state->getCompacting() || !state->getTypeHandler()->image_copyable() ||
-            state->stats().extra_used_bytes() != 0)
-        {
+        if (state->getCompacting()) {
+            return false;
+        }
+        if (image_mode(*state) == ImageMode::FRESH && has_live_entries(*state)) {
             return false;
         }
     }
@@ -534,16 +559,23 @@ bool DataStoreBase::save_image(image::ImageWriter& writer) {
         if (state == nullptr || !state->isActive()) {
             continue;
         }
-        const BufferTypeBase* type_handler = state->getTypeHandler();
-        size_t underflow = type_handler->buffer_underflow_size();
-        size_t used_bytes = underflow + state->size() * type_handler->entry_size();
-        auto   section = writer.write_section(state->get_alloc().get(), used_bytes);
+        BufferTypeBase* type_handler = state->getTypeHandler();
+        ImageMode       mode = image_mode(*state);
+        meta << id << uint32_t(state->getTypeId()) << uint8_t(mode) << uint64_t(state->get_alloc().size())
+             << uint64_t(state->size()) << uint64_t(state->stats().dead_entries() + state->stats().hold_entries())
+             << uint64_t(state->stats().extra_used_bytes());
+        if (mode == ImageMode::MAPPED) {
+            size_t used_bytes = type_handler->buffer_underflow_size() + state->size() * type_handler->entry_size();
+            meta << writer.write_section(state->get_alloc().get(), used_bytes);
+        } else if (mode == ImageMode::SERIALIZED) {
+            type_handler->save_image_entries(_buffers[id].get_buffer_relaxed(), state->size(), writer);
+        }
         const auto& refs = state->free_refs();
-        meta << id << uint32_t(state->getTypeId()) << uint64_t(state->get_alloc().size()) << uint64_t(state->size())
-             << uint64_t(state->stats().dead_entries() + state->stats().hold_entries()) << section
-             << uint64_t(refs.size());
-        for (auto ref : refs) {
-            meta << ref.ref();
+        meta << uint64_t(mode == ImageMode::FRESH ? 0 : refs.size());
+        if (mode != ImageMode::FRESH) {
+            for (auto ref : refs) {
+                meta << ref.ref();
+            }
         }
     }
     return true;
@@ -562,19 +594,11 @@ void DataStoreBase::load_image(image::ImageReader& reader) {
         meta >> id;
     }
     meta >> active;
+    reclaim_all_memory(); // entries on hold refer to the buffers being replaced
     dropBuffers();
-    for (uint32_t i = 0; i < active; ++i) {
-        uint32_t       id = 0, type_id = 0;
-        uint64_t       alloc_bytes = 0, used = 0, dead = 0, num_free = 0;
-        image::Section section;
-        meta >> id >> type_id >> alloc_bytes >> used >> dead >> section >> num_free;
-        if (id >= buffer_id_limit || type_id >= num_types) {
-            throw vespalib::IllegalStateException("Memory image has a bad buffer entry");
-        }
-        BufferTypeBase* type_handler = _typeHandlers[type_id];
-        BufferAndMeta&  buffer_meta = _buffers[id];
-        BufferState*    state = buffer_meta.get_state_relaxed();
-        if (state == nullptr) {
+    // Create buffer states up to the saved limit first, so buffers can be restored at their saved ids.
+    for (uint32_t id = 0; id < buffer_id_limit; ++id) {
+        if (_buffers[id].get_state_relaxed() == nullptr) {
             auto& new_state = _stash.create<BufferState>();
             if (_disable_entry_hold_list) {
                 new_state.disable_entry_hold_list();
@@ -582,22 +606,50 @@ void DataStoreBase::load_image(image::ImageReader& reader) {
             if (!_freeListsEnabled) {
                 new_state.disable_free_list();
             }
-            state = &new_state;
-            buffer_meta.set_state(state);
+            _buffers[id].set_state(&new_state);
         }
-        auto memory = reader.map(section, alloc_bytes, type_handler->get_memory_allocator());
-        state->restore_active(id, type_id, type_handler, std::move(memory), used, dead,
-                              buffer_meta.get_atomic_buffer());
-        buffer_meta.setTypeId(type_id);
-        if (type_handler->is_dynamic_array_buffer_type()) {
-            buffer_meta.set_entry_size(type_handler->entry_size());
+    }
+    if (buffer_id_limit > _bufferIdLimit.load(std::memory_order_relaxed)) {
+        _bufferIdLimit.store(buffer_id_limit, std::memory_order_release);
+    }
+    for (uint32_t i = 0; i < active; ++i) {
+        uint32_t id = 0, type_id = 0;
+        uint8_t  mode_byte = 0;
+        uint64_t alloc_bytes = 0, used = 0, dead = 0, extra_used_bytes = 0;
+        meta >> id >> type_id >> mode_byte >> alloc_bytes >> used >> dead >> extra_used_bytes;
+        if (id >= buffer_id_limit || type_id >= num_types || mode_byte > uint8_t(ImageMode::SERIALIZED)) {
+            throw vespalib::IllegalStateException("Memory image has a bad buffer entry");
+        }
+        ImageMode       mode = ImageMode(mode_byte);
+        BufferTypeBase* type_handler = _typeHandlers[type_id];
+        BufferAndMeta&  buffer_meta = _buffers[id];
+        BufferState*    state = buffer_meta.get_state_relaxed();
+        if (mode == ImageMode::MAPPED) {
+            image::Section section;
+            meta >> section;
+            auto memory = reader.map(section, alloc_bytes, type_handler->get_memory_allocator());
+            state->restore_active(id, type_id, type_handler, std::move(memory), used, dead,
+                                  buffer_meta.get_atomic_buffer());
+            buffer_meta.setTypeId(type_id);
+            if (type_handler->is_dynamic_array_buffer_type()) {
+                buffer_meta.set_entry_size(type_handler->entry_size());
+            } else {
+                buffer_meta.set_array_size(state->getArraySize());
+            }
+            if (_freeListsEnabled && !state->getCompacting()) {
+                state->enable_free_list(_free_lists[type_id]);
+            }
+        } else if (mode == ImageMode::FRESH) {
+            on_active(id, type_id, 0u);
         } else {
-            buffer_meta.set_array_size(state->getArraySize());
+            on_active(id, type_id, used);
+            size_t reserved = type_handler->get_reserved_entries(id);
+            type_handler->load_image_entries(buffer_meta.get_buffer_relaxed(), used, reserved, reader);
+            state->set_image_counts(used, dead, extra_used_bytes);
         }
+        uint64_t num_free = 0;
+        meta >> num_free;
         bool free_list = _freeListsEnabled && !state->getCompacting();
-        if (free_list) {
-            state->enable_free_list(_free_lists[type_id]);
-        }
         for (uint64_t f = 0; f < num_free; ++f) {
             uint32_t ref = 0;
             meta >> ref;
@@ -607,9 +659,6 @@ void DataStoreBase::load_image(image::ImageReader& reader) {
         }
     }
     _primary_buffer_ids = primary;
-    if (buffer_id_limit > _bufferIdLimit.load(std::memory_order_relaxed)) {
-        _bufferIdLimit.store(buffer_id_limit, std::memory_order_release);
-    }
     _compaction_count.store(compaction_count, std::memory_order_relaxed);
 }
 

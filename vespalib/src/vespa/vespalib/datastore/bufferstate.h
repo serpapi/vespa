@@ -77,6 +77,11 @@ public:
      */
     void restore_active(uint32_t bufferId, uint32_t typeId, BufferTypeBase* typeHandler, Alloc&& memory,
                         size_t used_entries, size_t dead_entries, std::atomic<void*>& buffer);
+    void set_image_counts(size_t used_entries, size_t dead_entries, size_t extra_used_bytes) noexcept {
+        _stats.used_entries_ref().store(used_entries, std::memory_order_relaxed);
+        _stats.set_dead_entries(dead_entries);
+        _stats.extra_used_bytes_ref().store(extra_used_bytes, std::memory_order_relaxed);
+    }
     const Alloc& get_alloc() const noexcept { return _buffer; }
     const std::vector<EntryRef>& free_refs() const noexcept { return _free_list.refs(); }
     void push_free_ref(EntryRef ref) { _free_list.push_entry(ref); }

@@ -7,9 +7,15 @@
 #include <vespa/vespalib/util/generation.h>
 #include <vespa/vespalib/util/memoryusage.h>
 
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <span>
+
+namespace vespalib::image {
+class ImageReader;
+class ImageWriter;
+} // namespace vespalib::image
 
 namespace vespalib::datastore {
 
@@ -45,6 +51,10 @@ public:
     virtual vespalib::MemoryUsage get_btree_memory_usage() const = 0;
     virtual vespalib::MemoryUsage get_hash_memory_usage() const = 0;
     virtual bool has_held_buffers() const = 0;
+    // Memory images (vespalib/util/image_file.h). Writer only, right after freeze().
+    virtual bool can_save_image() const { return false; }
+    virtual void save_image(image::ImageWriter&) { abort(); }
+    virtual void load_image(image::ImageReader&) { abort(); }
     virtual void compact_worst(bool compact_btree_dictionary, bool compact_hash_dictionary,
                                const CompactionStrategy& compaction_strategy) = 0;
 };

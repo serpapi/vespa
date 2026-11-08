@@ -86,6 +86,18 @@ public:
 
     const NodeAllocatorType& getAllocator() const { return _allocator; }
 
+    // Memory images (vespalib/util/image_file.h). Writer only, right after freeze().
+    bool can_save_image() const noexcept { return _store.can_save_image() && _allocator.can_save_image(); }
+    void save_image(image::ImageWriter& writer) {
+        _store.save_image(writer);
+        _allocator.save_image(writer);
+    }
+    void load_image(image::ImageReader& reader) {
+        _builder.clear(); // its leaf node lives in the node buffers being replaced
+        _store.load_image(reader);
+        _allocator.load_image(reader);
+    }
+
     void disableFreeLists() {
         _store.disableFreeLists();
         _allocator.disableFreeLists();

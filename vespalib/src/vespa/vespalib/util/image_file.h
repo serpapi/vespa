@@ -28,7 +28,8 @@ bool enabled() noexcept;
  * type non-trivially destructible, which is what this checks; std::atomic members (trivially destructible but
  * not trivially copyable) are fine.
  */
-template <typename T> constexpr bool image_copyable_v = std::is_trivially_destructible_v<T>;
+template <typename T> struct image_copyable : std::bool_constant<std::is_trivially_destructible_v<T>> {};
+template <typename T> constexpr bool image_copyable_v = image_copyable<T>::value;
 
 struct Section {
     uint64_t offset = 0;
@@ -69,6 +70,8 @@ public:
      * base (nullptr means the default allocator), and freeing it unmaps the mapping.
      */
     alloc::Alloc map(Section section, size_t capacity, const alloc::MemoryAllocator* base) const;
+    // Copies a section into memory the caller owns (for structures that cannot use a mapping).
+    void read(Section section, void* dst) const;
     const std::string& path() const noexcept { return _path; }
 
 private:

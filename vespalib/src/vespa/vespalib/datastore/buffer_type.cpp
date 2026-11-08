@@ -62,6 +62,14 @@ EntryCount BufferTypeBase::get_reserved_entries(uint32_t bufferId) const noexcep
     return bufferId == 0 ? 1u : 0u;
 }
 
+void BufferTypeBase::save_image_entries(const void*, EntryCount, image::ImageWriter&) const {
+    throw vespalib::IllegalStateException("Buffer type cannot save memory image entries");
+}
+
+void BufferTypeBase::load_image_entries(void*, EntryCount, EntryCount, image::ImageReader&) {
+    throw vespalib::IllegalStateException("Buffer type cannot load memory image entries");
+}
+
 void BufferTypeBase::on_active(uint32_t bufferId, std::atomic<EntryCount>* used_entries,
                                std::atomic<EntryCount>* dead_entries, void* buffer) {
     _aggr_counts.add_buffer(used_entries, dead_entries);

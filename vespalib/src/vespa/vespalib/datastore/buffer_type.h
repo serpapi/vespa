@@ -51,6 +51,15 @@ public:
     virtual void destroy_entries(void* buffer, EntryCount num_entries) = 0;
     // Whether this type's buffers can be saved and loaded as memory images (vespalib/util/image_file.h).
     virtual bool image_copyable() const noexcept { return false; }
+    /*
+     * For types that are not image_copyable but can write and rebuild their entries (e.g. entries owning heap
+     * memory). load_image_entries() constructs entries [reserved_entries, num_entries) in uninitialized memory
+     * and assigns the already constructed reserved entries.
+     */
+    virtual bool image_serializable() const noexcept { return false; }
+    virtual void save_image_entries(const void* buffer, EntryCount num_entries, image::ImageWriter& writer) const;
+    virtual void load_image_entries(void* buffer, EntryCount num_entries, EntryCount reserved_entries,
+                                    image::ImageReader& reader);
     virtual void fallback_copy(void* newBuffer, const void* oldBuffer, EntryCount num_entries) = 0;
 
     /**

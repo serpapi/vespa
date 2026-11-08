@@ -9,6 +9,8 @@
 #include "minmaxaggrcalc.h"
 #include "noaggrcalc.h"
 
+#include <vespa/vespalib/util/image_file.h>
+
 namespace vespalib::btree {
 
 template <typename, typename, typename, size_t, size_t> class BTreeNodeAllocator;
@@ -122,6 +124,19 @@ public:
 
 template <typename KeyT, typename DataT, typename AggrT = NoAggregated, typename CompareT = std::less<KeyT>,
           typename TraitsT = BTreeDefaultTraits, class AggrCalcT = NoAggrCalc>
+class BTreeRoot;
+
+} // namespace vespalib::btree
+
+namespace vespalib::image {
+// A B-tree root is two node refs; its destructor only checks that the tree was cleared.
+template <typename KeyT, typename DataT, typename AggrT, typename CompareT, typename TraitsT, class AggrCalcT>
+struct image_copyable<btree::BTreeRoot<KeyT, DataT, AggrT, CompareT, TraitsT, AggrCalcT>> : std::true_type {};
+} // namespace vespalib::image
+
+namespace vespalib::btree {
+
+template <typename KeyT, typename DataT, typename AggrT, typename CompareT, typename TraitsT, class AggrCalcT>
 class BTreeRoot : public BTreeRootT<KeyT, DataT, AggrT, CompareT, TraitsT> {
 public:
     using ParentType = BTreeRootT<KeyT, DataT, AggrT, CompareT, TraitsT>;

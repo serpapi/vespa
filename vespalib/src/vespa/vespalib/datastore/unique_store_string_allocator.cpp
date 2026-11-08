@@ -91,6 +91,33 @@ void UniqueStoreExternalStringBufferType::clean_hold(void* buffer, size_t offset
     }
 }
 
+void UniqueStoreExternalStringBufferType::save_image_entries(const void* buffer, EntryCount num_entries,
+                                                             image::ImageWriter& writer) const {
+    auto* entries = static_cast<const UniqueStoreEntry<std::string>*>(buffer);
+    auto& os = writer.meta();
+    for (EntryCount i = 0; i < num_entries * getArraySize(); ++i) {
+        os << entries[i].get_ref_count() << entries[i].value();
+    }
+}
+
+void UniqueStoreExternalStringBufferType::load_image_entries(void* buffer, EntryCount num_entries,
+                                                             EntryCount reserved_entries,
+                                                             image::ImageReader& reader) {
+    auto*       entries = static_cast<UniqueStoreEntry<std::string>*>(buffer);
+    auto&       is = reader.meta();
+    uint32_t    ref_count = 0;
+    std::string value;
+    for (EntryCount i = 0; i < num_entries * getArraySize(); ++i) {
+        is >> ref_count >> value;
+        if (i < reserved_entries * getArraySize()) {
+            entries[i].value() = value;
+        } else {
+            new (static_cast<void*>(entries + i)) UniqueStoreEntry<std::string>(value);
+        }
+        entries[i].set_ref_count(ref_count);
+    }
+}
+
 const vespalib::alloc::MemoryAllocator* UniqueStoreExternalStringBufferType::get_memory_allocator() const {
     return _memory_allocator.get();
 }

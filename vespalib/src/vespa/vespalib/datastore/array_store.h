@@ -188,6 +188,11 @@ public:
     // need object location before construction
     static DataStoreBase& get_data_store_base(ArrayStore& self) { return self._store; }
 
+    // Memory images (vespalib/util/image_file.h). Writer only. Entry refs stay valid across save and load.
+    bool can_save_image() const noexcept { return _store.can_save_image(); }
+    void save_image(image::ImageWriter& writer) { _store.save_image(writer); }
+    void load_image(image::ImageReader& reader) { _store.load_image(reader); }
+
     std::unique_ptr<StateExplorer> make_state_explorer() const;
 
     // Should only be used for unit testing

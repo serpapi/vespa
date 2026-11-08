@@ -336,4 +336,31 @@ void UniqueStoreDictionary<BTreeDictionaryT, ParentT, HashDictionaryT>::compact_
     }
 }
 
+template <typename BTreeDictionaryT, typename ParentT, typename HashDictionaryT>
+bool UniqueStoreDictionary<BTreeDictionaryT, ParentT, HashDictionaryT>::can_save_image() const {
+    if constexpr (has_btree_dictionary && !has_hash_dictionary) {
+        return this->_btree_dict.can_save_image();
+    } else {
+        return false; // the hash dictionary holds pointers
+    }
+}
+
+template <typename BTreeDictionaryT, typename ParentT, typename HashDictionaryT>
+void UniqueStoreDictionary<BTreeDictionaryT, ParentT, HashDictionaryT>::save_image(image::ImageWriter& writer) {
+    if constexpr (has_btree_dictionary && !has_hash_dictionary) {
+        this->_btree_dict.save_image(writer);
+    } else {
+        abort();
+    }
+}
+
+template <typename BTreeDictionaryT, typename ParentT, typename HashDictionaryT>
+void UniqueStoreDictionary<BTreeDictionaryT, ParentT, HashDictionaryT>::load_image(image::ImageReader& reader) {
+    if constexpr (has_btree_dictionary && !has_hash_dictionary) {
+        this->_btree_dict.load_image(reader);
+    } else {
+        abort();
+    }
+}
+
 } // namespace vespalib::datastore

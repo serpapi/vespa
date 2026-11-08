@@ -81,6 +81,9 @@ public:
     bool has_held_buffers() const override;
     void compact_worst(bool compact_btree_dictionary, bool compact_hash_dictionary,
                        const CompactionStrategy& compaction_strategy) override;
+    bool can_save_image() const override;
+    void save_image(image::ImageWriter& writer) override;
+    void load_image(image::ImageReader& reader) override;
 };
 
 } // namespace vespalib::datastore
