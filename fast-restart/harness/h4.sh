@@ -32,10 +32,15 @@ for i in $(seq 0 $((P - 1))); do
       | vespa feed --connections 4 - > /dev/null 2> $OUT/feed-$i.err ) &
   FEEDERS+=($!)
 done
+# Deterministic partial updates of three plain numeric attributes on ids the re-puts above never touch.
+UPD_START=48000000 UPD_N=${UPD_N:-2000000}
+( python3 ~/harness/updates.py $UPD_START $UPD_N | python3 ~/harness/throttle.py ${UPD_RATE:-1000} \
+    | vespa feed --connections 2 - > /dev/null 2> $OUT/feed-updates.err ) &
+FEEDERS+=($!)
 T0=$(cat $OUT/feed.start); max=0
 while true; do
   sleep 5
-  now=$(date +%s.%N); el=$(echo "$now - $T0" | bc | cut -d. -f1)
+  el=$(awk -v a=$(date +%s.%N) -v b=$T0 'BEGIN { printf "%d", a - b }')
   size=$(sudo du -sb $TLS | cut -f1)
   echo "$el $size" >> $OUT/tls-size.txt
   [ $size -gt $max ] && max=$size
@@ -47,9 +52,21 @@ sudo kill -9 $pid
 while sudo kill -0 $pid 2>/dev/null; do sleep 0.2; done
 T_EXIT=$(date +%s.%N)
 echo "$T_STOP $T_EXIT $el $size $max" > $OUT/kill.txt
-sudo kill -INT $BPF; wait $BPF || true
 for f in "${FEEDERS[@]}"; do pkill -P $f 2>/dev/null || true; kill $f 2>/dev/null || true; done
-pkill -f 'r6load docs' || true; pkill -f 'throttle.py' || true; pkill -f 'vespa feed' || true
+pkill -f 'r6load docs' || true; pkill -f 'updates.py' || true; pkill -f 'throttle.py' || true
+pkill -f 'vespa feed' || true
+sudo kill -INT $BPF; wait $BPF || true
 until awk -F'\t' -v t=$T_EXIT '$1>t && $4=="searchnode" && $7 ~ /started\/1 name="proton"/ {f=1} END{exit !f}' $LOG 2>/dev/null; do sleep 2; done
 kill $IOSTAT
 python3 ~/harness/events.py $LOG $T_STOP $T_EXIT "$NAME" kill 0 | tee $OUT/restart.json
+# Documents and the partial updates are functions of the id, so after any number of re-puts and at least one pass
+# of updates every arm must return the same counts for filters on the plain numeric attributes (restored from
+# delta checkpoints in h4-proto) and match-all.
+until curl -sf 'http://localhost:8080/search/?yql=select%20*%20from%20webpage%20where%20true&hits=0' | grep -q totalCount; do sleep 5; done
+for q in true "url_len > 60" "path_depth = 2" "status_code = 1" "quality_score > 0.5" "last_updated > 1750000000" \
+         "original_authority = 7" "host_pagerank < 10" "host_quality > 0.9" "tranco_rank < 1000" "price > 900" \
+         "status = 3" "boost < 0.01" "price >= 1000" "status = 7" "boost >= 2"; do
+  c=$(curl -s --data-urlencode "yql=select * from webpage where $q" --data-urlencode hits=0 --data-urlencode ranking=unranked \
+      --data-urlencode timeout=60s -G http://localhost:8080/search/ | jq .root.fields.totalCount)
+  echo "$c	$q"
+done | tee $OUT/attribute-hits.txt
