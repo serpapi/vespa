@@ -10,6 +10,8 @@
 #include <vespa/searchlib/common/serialnumfileheadercontext.h>
 #include <vespa/searchlib/queryeval/isourceselector.h>
 
+#include <filesystem>
+
 #include <vespa/log/log.h>
 LOG_SETUP(".searchcorespi.index.fusionrunner");
 
@@ -38,6 +40,16 @@ FusionRunner::FusionRunner(const string& base_dir, const Schema& schema, const T
 FusionRunner::~FusionRunner() = default;
 
 namespace {
+
+// Points the relative ids of flush ids merged away by an intermediate fusion at the index holding them now.
+void apply_merged_into(const FusionSpec& fusion_spec, vector<uint8_t>& id_map) {
+    for (auto [merged_id, into_id] : fusion_spec.merged_into) {
+        if (merged_id > fusion_spec.last_fusion_id && into_id - fusion_spec.last_fusion_id < id_map.size() &&
+            merged_id - fusion_spec.last_fusion_id < id_map.size()) {
+            id_map[merged_id - fusion_spec.last_fusion_id] = id_map[into_id - fusion_spec.last_fusion_id];
+        }
+    }
+}
 
 void readSelectorArray(const string& selector_name, SelectorArray& selector_array, const vector<uint8_t>& id_map,
                        uint32_t base_id, uint32_t fusion_id) {
@@ -96,6 +108,7 @@ uint32_t FusionRunner::fuse(const FusionSpec& fusion_spec, SerialNum lastSerialN
         id_map[id - fusion_spec.last_fusion_id] = sources.size();
         sources.push_back(_diskLayout.getFlushDir(id));
     }
+    apply_merged_into(fusion_spec, id_map);
 
     if (LOG_WOULD_LOG(event)) {
         EventLogger::diskFusionStart(sources, fusion_dir);
@@ -120,6 +133,53 @@ uint32_t FusionRunner::fuse(const FusionSpec& fusion_spec, SerialNum lastSerialN
         EventLogger::diskFusionComplete(fusion_dir, vespalib::count_ms(timer.elapsed()));
     }
     return fusion_id;
+}
+
+bool FusionRunner::fuse_intermediate(const FusionSpec& fusion_spec, const vector<uint32_t>& ids,
+                                     const string& output_dir, SerialNum lastSerialNum,
+                                     IIndexMaintainerOperations&          operations,
+                                     std::shared_ptr<search::IFlushToken> flush_token) {
+    CHECK(ids.size() >= 2 && ids.front() > fusion_spec.last_fusion_id);
+    vector<string> sources;
+    // Every source id not listed maps past the last input, which Fusion treats as "in no input": the base
+    // index and anything newer than ids.back() keep their documents.
+    vector<uint8_t> id_map(256, static_cast<uint8_t>(ids.size()));
+    for (uint32_t id : ids) {
+        id_map[id - fusion_spec.last_fusion_id] = sources.size();
+        sources.push_back(_diskLayout.getFlushDir(id));
+    }
+    apply_merged_into(fusion_spec, id_map);
+    if (LOG_WOULD_LOG(event)) {
+        EventLogger::diskFusionStart(sources, output_dir);
+    }
+    vespalib::Timer timer;
+    // The newest flushed selector also drops documents that were re-fed into a flushed index newer than
+    // ids.back() since that one was written.
+    const uint32_t newest_id = fusion_spec.flush_ids.empty() ? ids.back() : std::max(ids.back(), fusion_spec.flush_ids.back());
+    const string   selector_name = IndexDiskLayout::getSelectorFileName(_diskLayout.getFlushDir(newest_id));
+    SelectorArray  selector_array;
+    readSelectorArray(selector_name, selector_array, id_map, fusion_spec.last_fusion_id, newest_id);
+    if (!operations.runFusion(_schema, output_dir, sources, selector_array, lastSerialNum, flush_token)) {
+        return false;
+    }
+    // Copy the selector files (selector.dat and friends) of the newest input as they are.
+    const std::filesystem::path flush_dir(_diskLayout.getFlushDir(ids.back()));
+    for (const auto& entry : std::filesystem::directory_iterator(flush_dir)) {
+        if (entry.path().filename().string().starts_with("selector")) {
+            std::error_code ec;
+            std::filesystem::copy_file(entry.path(), std::filesystem::path(output_dir) / entry.path().filename(),
+                                       std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                LOG(warning, "Unable to copy '%s' to '%s': %s", entry.path().c_str(), output_dir.c_str(),
+                    ec.message().c_str());
+                return false;
+            }
+        }
+    }
+    if (LOG_WOULD_LOG(event)) {
+        EventLogger::diskFusionComplete(output_dir, vespalib::count_ms(timer.elapsed()));
+    }
+    return true;
 }
 
 } // namespace searchcorespi::index

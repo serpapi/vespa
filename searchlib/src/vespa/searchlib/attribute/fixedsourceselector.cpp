@@ -70,6 +70,18 @@ FixedSourceSelector::FixedSourceSelector(queryeval::Source defaultSource, const 
 
 FixedSourceSelector::~FixedSourceSelector() = default;
 
+void FixedSourceSelector::remapSources(const std::array<queryeval::Source, 256>& new_source) {
+    const uint32_t num_docs = _source.getNumDocs();
+    for (uint32_t docId = 0; docId < num_docs; ++docId) {
+        auto source = static_cast<queryeval::Source>(_source.getFast(docId));
+        if (new_source[source] != source) {
+            CHECK(new_source[source] < SOURCE_LIMIT);
+            _source.set(docId, static_cast<int8_t>(new_source[source]));
+        }
+    }
+    _source.commit();
+}
+
 FixedSourceSelector::UP FixedSourceSelector::cloneAndSubtract(const std::string& attrBaseFileName, uint32_t diff) {
     queryeval::Source newDefault = getNewSource(getDefaultSource(), diff);
     auto selector = std::make_unique<FixedSourceSelector>(newDefault, attrBaseFileName, std::numeric_limits<uint32_t>::max());
