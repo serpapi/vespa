@@ -644,6 +644,7 @@ TEST_F(TieredFusionTest, require_that_full_fusion_after_intermediate_fusion_keep
     spec.flush_ids = {6, 7};
     spec.merged_into = {{3, 6}, {4, 6}, {5, 6}};
     _index_manager->getMaintainer().runFusion(spec, std::make_shared<search::FlushToken>());
+    sync_index_removal();
     EXPECT_EQ((std::set<string>{"index.fusion.7"}), index_dir_names());
     EXPECT_EQ(6u, num_docs_with_word(index_dir + "/index.fusion.7", "foo"));
 }
@@ -679,6 +680,7 @@ TEST_F(TieredFusionTest, require_that_fusion_target_merges_flushed_indexes_when_
         flushIndexManager();
     }
     run_fusion(true); // no fused index yet: a full fusion builds it
+    sync_index_removal();
     EXPECT_EQ((std::set<string>{"index.fusion.2"}), index_dir_names());
     for (uint32_t i = 2; i < 6; ++i) {
         addDocument(docid + i);
