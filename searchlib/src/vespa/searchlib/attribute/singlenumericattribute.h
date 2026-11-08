@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "delta_checkpoint.h"
 #include "floatbase.h"
 #include "integerbase.h"
 #include "search_context.h"
@@ -13,8 +14,10 @@
 
 #include <atomic>
 #include <limits>
+#include <memory>
 #include <span>
 #include <type_traits>
+#include <vector>
 
 namespace search {
 
@@ -33,6 +36,13 @@ private:
     using B::getGenerationHolder;
 
     DataVector _data;
+    // Delta checkpoints (see delta_checkpoint.h): set when enabled or when loaded from a checkpoint that has an
+    // id. Lids changed since the full checkpoint new deltas are based on; may hold duplicates until a save.
+    std::shared_ptr<attribute::DeltaCheckpoints> _delta_checkpoints;
+    std::vector<uint32_t>                        _changed_since_full_checkpoint;
+
+    bool onLoadDeltaCheckpoint(ReaderBase& attrReader);
+    std::unique_ptr<AttributeSaver> initDeltaCheckpointSave(std::string_view fileName);
 
     T getFromEnum(EnumHandle e) const override {
         (void)e;
@@ -67,6 +77,7 @@ public:
     bool onLoad(vespalib::Executor* executor) override;
 
     bool onLoadEnumerated(ReaderBase& attrReader);
+    void enable_delta_checkpoints() override;
 
     std::unique_ptr<attribute::SearchContext> getSearch(std::unique_ptr<QueryTermSimple>      term,
                                                         const attribute::SearchContextParams& params) const override;

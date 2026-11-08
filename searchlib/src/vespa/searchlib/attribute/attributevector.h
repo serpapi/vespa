@@ -498,6 +498,8 @@ public:
     std::unique_ptr<AttributeSaver> initSave(std::string_view fileName);
 
     virtual std::unique_ptr<AttributeSaver> onInitSave(std::string_view fileName);
+    // Lets fixed-width attributes save delta checkpoints (attribute/delta_checkpoint.h). No-op for others.
+    virtual void enable_delta_checkpoints() {}
     virtual uint64_t getEstimatedSaveByteSize() const;
     [[nodiscard]] virtual size_t reserved_memory_for_flush(bool slow_disk) const noexcept;
 
