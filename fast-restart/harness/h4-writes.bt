@@ -1,0 +1,20 @@
+// Bytes written by one process, by the names of the file's parent, grandparent and great-grandparent
+// directories (enough to tell attribute snapshots, the document meta store, disk index flush/fusion
+// directories, the document store and the transaction log apart) · spec: fast-restart/PREREG.md H4
+// usage: bpftrace h4-writes.bt PID   (prints the map on SIGINT)
+kprobe:vfs_write /pid == $1/ {
+    @file[tid] = arg0;
+}
+
+kretprobe:vfs_write /pid == $1 && @file[tid] != 0/ {
+    if ((int64)retval > 0) {
+        $d = ((struct file *)@file[tid])->f_path.dentry->d_parent;
+        @bytes[str($d->d_name.name), str($d->d_parent->d_name.name), str($d->d_parent->d_parent->d_name.name)] =
+            sum(retval);
+    }
+    delete(@file[tid]);
+}
+
+END {
+    clear(@file);
+}

@@ -72,3 +72,28 @@ query and of 20 fixed term queries identical to stock at the same serial number)
 
 No change to production. No upstream issue or PR. Query latency is measured only as a guard (p50/p99 of a
 fixed query set before and after, reported, not a pass rule).
+
+## Amendment 2026-11-08 (written before any H4 run)
+
+H4 was not run in the first round because no prototype bounded the attribute checkpoints. It is now run as
+follows, on a fresh i8g.4xlarge with the same 50M-document load and `harness/app` (production overrides):
+
+- Arms, each restored from the same snapshot, n = 1 each:
+  - `h4-stock`: stock 8.781.11, default `flush.memory.maxtlssize` (20 GiB). The bytes baseline.
+  - `h4-stock-tls1g`: stock with `maxtlssize` 1 GiB (`harness/app-h4-tls1g`). The control that bounds the tail
+    by writing more.
+  - `h4-proto`: build `serpapi-8.781.11-fast-restart-h4` (tiered fusion, old indexes removed off the query
+    thread, delta checkpoints for plain single-value numeric attributes and the document meta store), with
+    `VESPA_TIERED_FUSION=1`, `VESPA_DELTA_ATTRIBUTE_CHECKPOINTS=1` and `maxtlssize` 1 GiB.
+- Steady feed: re-puts of existing documents at 5,000 docs/s (8 rate-limited pipelines over disjoint id
+  windows) for at least 50 min.
+- Worst point: after 50 min of feed, SIGKILL at the first 5 s poll where the transaction log directory is at
+  least 90 % of the largest size seen in that feed (at 70 min at the latest).
+- Restart: SIGKILL to proton `started` (`events.py` `exit_to_started_s`); component load time is the same
+  restart's `init_s`. Pass: `exit_to_started_s <= init_s + 60`.
+- Bytes: proton's write bytes during the feed by file path (`harness/h4-writes.bt`, `vfs_write` return values),
+  grouped as attributes, document meta store, disk index (flush, intermediate, fusion), document store and
+  transaction log. "Flush plus fusion bytes" = everything except the transaction log, per hour of feed. Pass:
+  `h4-proto` <= 1.1x `h4-stock`. Totals from `/proc/<pid>/io` are reported next to them.
+- Expected before running: string and multi-value attributes still rewrite in full at every checkpoint, so
+  `h4-proto` may fail the bytes condition; the per-group bytes say by how much and where.

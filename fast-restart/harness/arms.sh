@@ -42,7 +42,7 @@ arm)
     vespa deploy --wait 600 ~/harness/app-ab > $OUT/$NAME/deploy.txt 2>&1
     sleep 30
   fi
-  echo "$NAME up: build=$BUILD searchlib=$(dx sha256sum /opt/vespa/lib64/libvespa_searchlib.so | cut -c1-12) proton=$(dx sha256sum /opt/vespa/sbin/vespa-proton-bin | cut -c1-12) env=[$(sudo cat /proc/$(proton_pid)/environ | tr '\0' '\n' | grep -E '^VESPA_(TIERED|REPLAY)' | tr '\n' ' ')]" | tee $OUT/$NAME/arm.txt
+  echo "$NAME up: build=$BUILD searchlib=$(dx sha256sum /opt/vespa/lib64/libvespa_searchlib.so | cut -c1-12) proton=$(dx sha256sum /opt/vespa/sbin/vespa-proton-bin | cut -c1-12) env=[$(sudo cat /proc/$(proton_pid)/environ | tr '\0' '\n' | grep -E '^VESPA_(TIERED|REPLAY|DELTA)' | tr '\n' ' ')]" | tee $OUT/$NAME/arm.txt
   if [ -n "$ENVL" ]; then grep -q "$(echo $ENVL | awk '{print $2}')" $OUT/$NAME/arm.txt || { echo "env not in proton" >&2; exit 1; }; fi ;;
 feed)
   NAME=$2 OPS=$3; D=$OUT/$NAME; mkdir -p $D
