@@ -6,6 +6,12 @@
 
 #include <vespa/searchlib/transactionlog/common.h>
 
+#include <memory>
+
+namespace document {
+class DocumentTypeRepo;
+}
+
 namespace proton {
 
 class FeedOperation;
@@ -30,6 +36,14 @@ public:
     virtual ~ReplayPacketDispatcher();
 
     void replayEntry(const Packet::Entry& entry);
+
+    /**
+     * Deserializes a put, update or remove entry without side effects, so that it can run on any thread.
+     * Returns nullptr for every other entry type; those go through replayEntry().
+     */
+    static std::unique_ptr<FeedOperation> decode(const Packet::Entry& entry, const document::DocumentTypeRepo& repo);
+    // Replays an operation that decode() returned.
+    void dispatch(const FeedOperation& op);
 };
 
 } // namespace proton

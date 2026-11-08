@@ -9,6 +9,10 @@
 
 #include <vespa/searchcore/proton/common/commit_time_tracker.h>
 
+namespace vespalib {
+class ThreadStackExecutor;
+}
+
 namespace proton {
 
 /**
@@ -41,8 +45,9 @@ public:
  * Replayed messages from the transaction log are sent to the active feed view.
  */
 class ReplayTransactionLogState : public FeedState {
-    std::string                           _doc_type_name;
-    std::unique_ptr<IReplayPacketHandler> _packet_handler;
+    std::string                                    _doc_type_name;
+    std::unique_ptr<IReplayPacketHandler>          _packet_handler;
+    std::unique_ptr<vespalib::ThreadStackExecutor> _decode_executor;
 
 public:
     ReplayTransactionLogState(const std::string& name, IFeedView*& feed_view_ptr,

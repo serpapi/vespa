@@ -99,6 +99,53 @@ void ReplayPacketDispatcher::replayEntry(const Packet::Entry& entry) {
     }
 }
 
+std::unique_ptr<FeedOperation> ReplayPacketDispatcher::decode(const Packet::Entry&           entry,
+                                                              const document::DocumentTypeRepo& repo) {
+    std::unique_ptr<FeedOperation> op;
+    switch (entry.type()) {
+    case FeedOperation::PUT:
+        op = std::make_unique<PutOperation>();
+        break;
+    case FeedOperation::REMOVE:
+        op = std::make_unique<RemoveOperationWithDocId>();
+        break;
+    case FeedOperation::REMOVE_GID:
+        op = std::make_unique<RemoveOperationWithGid>();
+        break;
+    case FeedOperation::UPDATE:
+        op = std::make_unique<UpdateOperation>(static_cast<FeedOperation::Type>(entry.type()));
+        break;
+    default:
+        return {};
+    }
+    vespalib::nbostream is(entry.data().c_str(), entry.data().size());
+    op->deserialize(is, repo);
+    op->setSerialNum(entry.serial());
+    if (!is.empty()) {
+        throw document::DeserializeException(
+            make_string("Too much data in packet entry (type id '%u', %ld bytes)", entry.type(), is.size()));
+    }
+    return op;
+}
+
+void ReplayPacketDispatcher::dispatch(const FeedOperation& op) {
+    store(op);
+    switch (op.getType()) {
+    case FeedOperation::PUT:
+        _handler.replay(static_cast<const PutOperation&>(op));
+        break;
+    case FeedOperation::REMOVE:
+    case FeedOperation::REMOVE_GID:
+        _handler.replay(static_cast<const RemoveOperation&>(op));
+        break;
+    case FeedOperation::UPDATE:
+        _handler.replay(static_cast<const UpdateOperation&>(op));
+        break;
+    default:
+        throw IllegalStateException(make_string("Cannot dispatch decoded operation of type '%u'", op.getType()));
+    }
+}
+
 ReplayPacketDispatcher::~ReplayPacketDispatcher() = default;
 
 void ReplayPacketDispatcher::store(const FeedOperation&) {
