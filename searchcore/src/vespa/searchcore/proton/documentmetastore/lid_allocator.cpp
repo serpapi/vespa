@@ -74,6 +74,13 @@ void LidAllocator::ensureSpace(uint32_t newSize, uint32_t newCapacity) {
     _activeLids.resizeVector(newSize, newCapacity);
 }
 
+void LidAllocator::load_used_lids(const uint64_t* words, uint32_t num_bits) {
+    CHECK(!isFreeListConstructed());
+    CHECK(_holdLids.size() == 0);
+    CHECK(_activeLids.empty() && _pendingHoldLids.empty() && _freeLids.empty());
+    _usedLids.load_bits(words, num_bits);
+}
+
 void LidAllocator::unregisterLid(DocId lid) {
     CHECK(!_pendingHoldLids.testBit(lid));
     if (isFreeListConstructed()) {

@@ -7,6 +7,10 @@
 #include <vespa/searchcore/proton/common/subdbtype.h>
 #include <vespa/vespalib/util/memory.h>
 
+namespace vespalib {
+class nbostream;
+}
+
 namespace proton::bucketdb {
 
 class ChecksumAggregator;
@@ -39,6 +43,7 @@ private:
 
 public:
     static void setChecksumType(ChecksumType checksum);
+    static ChecksumType getChecksumType() noexcept { return _checksumType; }
     BucketState();
     BucketState(const BucketState& rhs);
     BucketState(BucketState&& rhs) noexcept;
@@ -74,6 +79,11 @@ public:
     BucketState& operator-=(const BucketState& rhs);
     void applyDelta(BucketState* src, BucketState* dst) const;
     operator storage::spi::BucketInfo() const;
+
+    // The raw state, for memory images of the document meta store. Checksums are only valid for the checksum
+    // type they were computed with.
+    void serialize(vespalib::nbostream& os) const;
+    void deserialize(vespalib::nbostream& is);
 };
 
 } // namespace proton::bucketdb

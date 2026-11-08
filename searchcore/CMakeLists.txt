@@ -77,6 +77,7 @@ vespa_define_module(
     src/tests/proton/documentdb/feedhandler
     src/tests/proton/documentdb/fileconfigmanager
     src/tests/proton/documentmetastore
+    src/tests/proton/documentmetastore/image
     src/tests/proton/documentmetastore/lidreusedelayer
     src/tests/proton/documentmetastore/lid_allocator
     src/tests/proton/documentmetastore/lid_state_vector

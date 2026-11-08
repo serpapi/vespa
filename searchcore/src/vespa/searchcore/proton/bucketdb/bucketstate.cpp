@@ -5,6 +5,7 @@
 #include "checksumaggregators.h"
 
 #include <vespa/check_require.h>
+#include <vespa/vespalib/objects/nbostream.h>
 
 #include <xxhash.h>
 
@@ -35,6 +36,24 @@ BucketState::BucketState() : _ch(), _docSizes(), _docCount(), _active(false) {
         _docCount[i] = 0;
         _docSizes[i] = 0;
     }
+}
+
+void BucketState::serialize(vespalib::nbostream& os) const {
+    os << _ch._xxh64;
+    for (uint32_t i = 0; i < COUNTS; ++i) {
+        os << uint64_t(_docSizes[i]) << _docCount[i];
+    }
+    os << _active;
+}
+
+void BucketState::deserialize(vespalib::nbostream& is) {
+    is >> _ch._xxh64;
+    for (uint32_t i = 0; i < COUNTS; ++i) {
+        uint64_t doc_sizes = 0;
+        is >> doc_sizes >> _docCount[i];
+        _docSizes[i] = doc_sizes;
+    }
+    is >> _active;
 }
 
 BucketState::BucketChecksum BucketState::getChecksum() const {
