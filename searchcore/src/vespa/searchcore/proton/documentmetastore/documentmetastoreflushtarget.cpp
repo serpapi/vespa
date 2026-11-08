@@ -16,6 +16,7 @@
 #include <vespa/searchlib/common/serialnumfileheadercontext.h>
 #include <vespa/searchlib/util/filekit.h>
 #include <vespa/vespalib/io/fileutil.h>
+#include <vespa/vespalib/util/image_file.h>
 
 #include <chrono>
 #include <filesystem>
@@ -45,6 +46,7 @@ private:
     uint64_t                                    _syncToken;
     std::string                                 _flushDir;
     std::unique_ptr<AttributeDirectory::Writer> _writer;
+    bool                                        _image_saved;
 
     bool saveDocumentMetaStore(); // not updating snap info.
 public:
@@ -61,12 +63,31 @@ public:
 
 DocumentMetaStoreFlushTarget::Flusher::Flusher(DocumentMetaStoreFlushTarget& dmsft, SerialNum syncToken,
                                                std::unique_ptr<AttributeDirectory::Writer> writer)
-    : _dmsft(dmsft), _saver(), _syncToken(syncToken), _flushDir(""), _writer(std::move(writer)) {
+    : _dmsft(dmsft),
+      _saver(),
+      _syncToken(syncToken),
+      _flushDir(""),
+      _writer(std::move(writer)),
+      _image_saved(false) {
     // Called by document db executor
     DocumentMetaStore& dms = *_dmsft._dms;
     dms.commit(CommitParam(syncToken, CommitParam::UpdateStats::SKIP));
     _flushDir = _writer->getSnapshotDir(syncToken);
     std::string newBaseFileName(_flushDir + "/" + dms.getName());
+    if (vespalib::image::enabled()) {
+        // A memory image is written here, on the thread that owns writes, as nothing changes the store meanwhile.
+        _writer->createInvalidSnapshot(syncToken);
+        std::filesystem::create_directory(std::filesystem::path(_flushDir));
+        SerialNumFileHeaderContext fileHeaderContext(_dmsft._fileHeaderContext, syncToken);
+        auto                       create_time = std::chrono::steady_clock::now();
+        _image_saved = dms.save_image_file(newBaseFileName, fileHeaderContext);
+        if (_image_saved) {
+            dms.set_last_flush_duration(CreateAndFreezeTimes::make_flush_duration(create_time));
+            return;
+        }
+        LOG(info, "Document meta store '%s' cannot be saved as a memory image now, saving normally",
+            newBaseFileName.c_str());
+    }
     _saver = dms.initSave(newBaseFileName);
     CHECK(_saver);
 }
@@ -74,6 +95,11 @@ DocumentMetaStoreFlushTarget::Flusher::Flusher(DocumentMetaStoreFlushTarget& dms
 DocumentMetaStoreFlushTarget::Flusher::~Flusher() = default;
 
 bool DocumentMetaStoreFlushTarget::Flusher::saveDocumentMetaStore() {
+    if (_image_saved) {
+        File::sync(_writer->getSnapshotDir(_syncToken));
+        File::sync(_writer->get_dir());
+        return true;
+    }
     std::filesystem::create_directory(std::filesystem::path(_flushDir));
     SerialNumFileHeaderContext fileHeaderContext(_dmsft._fileHeaderContext, _syncToken);
     bool                       saveSuccess = false;
