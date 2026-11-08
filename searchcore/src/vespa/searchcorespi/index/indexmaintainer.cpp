@@ -327,7 +327,8 @@ std::shared_ptr<IDiskIndex> IndexMaintainer::loadDiskIndex(const string& indexDi
     auto            stats = index->get_index_stats(false);
     _disk_indexes->setActive(indexDir, stats.sizeOnDisk(), index->create_and_freeze_times().get_flush_duration());
     auto retval =
-        std::make_shared<DiskIndexWithDestructorCleanup>(_remove_lock, std::move(index), _layout, _disk_indexes);
+        std::make_shared<DiskIndexWithDestructorCleanup>(_remove_lock, _index_remover, std::move(index), _layout,
+                                                         _disk_indexes);
     if (LOG_WOULD_LOG(event)) {
         EventLogger::diskIndexLoadComplete(indexDir, vespalib::count_ms(timer.elapsed()));
     }
@@ -346,7 +347,8 @@ std::shared_ptr<IDiskIndex> IndexMaintainer::reloadDiskIndex(const IDiskIndex& o
     auto              stats = index->get_index_stats(false);
     _disk_indexes->setActive(indexDir, stats.sizeOnDisk(), index->create_and_freeze_times().get_flush_duration());
     auto retval =
-        std::make_shared<DiskIndexWithDestructorCleanup>(_remove_lock, std::move(index), _layout, _disk_indexes);
+        std::make_shared<DiskIndexWithDestructorCleanup>(_remove_lock, _index_remover, std::move(index), _layout,
+                                                         _disk_indexes);
     if (LOG_WOULD_LOG(event)) {
         EventLogger::diskIndexLoadComplete(indexDir, vespalib::count_ms(timer.elapsed()));
     }
@@ -802,6 +804,7 @@ IndexMaintainer::IndexMaintainer(const IndexMaintainerConfig& config, const Inde
                                  IIndexMaintainerOperations& operations)
     : _base_dir(config.getBaseDir()),
       _warmupConfig(config.getWarmup()),
+      _index_remover(std::make_shared<vespalib::ThreadStackExecutor>(1)),
       _disk_indexes(std::make_shared<DiskIndexes>()),
       _layout(std::make_shared<IndexDiskLayout>(config.getBaseDir())),
       _schema(config.getSchema()),

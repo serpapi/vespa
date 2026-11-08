@@ -12,6 +12,7 @@
 #include <vespa/searchcorespi/flush/iflushtarget.h>
 #include <vespa/searchlib/attribute/fixedsourceselector.h>
 #include <vespa/searchlib/common/serialnum.h>
+#include <vespa/vespalib/util/threadstackexecutor.h>
 
 #include <atomic>
 
@@ -74,6 +75,8 @@ class IndexMaintainer : public IIndexManager, public IWarmupDone {
 
     const std::string                _base_dir;
     const WarmupConfig               _warmupConfig;
+    // Removes old index directories; declared before the members whose destruction schedules removals.
+    std::shared_ptr<vespalib::ThreadStackExecutor> _index_remover;
     std::shared_ptr<DiskIndexes>     _disk_indexes;
     std::shared_ptr<IndexDiskLayout> _layout;
     Schema                           _schema;             // Protected by SL + IUL
@@ -384,6 +387,8 @@ public:
     SerialNum getCurrentSerialNum() const override { return current_serial_num(); }
 
     SerialNum getFlushedSerialNum() const override { return flush_serial_num(); }
+
+    vespalib::ThreadStackExecutor& getIndexRemover() const { return *_index_remover; }
 
     std::shared_ptr<IIndexCollection> getSourceCollection() const {
         LockGuard lock(_new_search_lock);
