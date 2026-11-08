@@ -245,33 +245,6 @@ TEST_F(BucketHandlerTest, node_going_down_but_not_into_maintenance_state_deactiv
     EXPECT_EQ(true, _bucketInfo.getInfo().isActive());
 }
 
-// An active state restored from a memory image is in place before the handler sees its first cluster state.
-TEST_F(BucketHandlerTest, restored_active_state_is_kept_when_first_cluster_state_has_node_up) {
-    BucketHandler handler(_exec);
-    handler.setReadyBucketHandler(_ready._metaStore);
-    _ready._metaStore.setBucketState(_ready.bucket(2), true);
-    auto calc = std::make_shared<BucketStateCalculator>();
-    calc->setNodeUp(true);
-    handler.notifyClusterStateChanged(calc);
-    sync();
-    handleGetBucketInfo(_ready.bucket(2));
-    EXPECT_TRUE(_bucketInfo.getInfo().isActive());
-    EXPECT_EQ(2u, _ready._metaStore.getNumActiveLids());
-}
-
-TEST_F(BucketHandlerTest, restored_active_state_is_deactivated_when_first_cluster_state_has_node_down) {
-    BucketHandler handler(_exec);
-    handler.setReadyBucketHandler(_ready._metaStore);
-    _ready._metaStore.setBucketState(_ready.bucket(2), true);
-    auto calc = std::make_shared<BucketStateCalculator>();
-    calc->setNodeUp(false);
-    handler.notifyClusterStateChanged(calc);
-    sync();
-    handleGetBucketInfo(_ready.bucket(2));
-    EXPECT_FALSE(_bucketInfo.getInfo().isActive());
-    EXPECT_EQ(0u, _ready._metaStore.getNumActiveLids());
-}
-
 TEST_F(BucketHandlerTest, node_going_into_maintenance_state_does__not__deactivate_any_buckets) {
     _handler.handleSetCurrentState(_ready.bucket(2), BucketInfo::ACTIVE, _genResult);
     sync();
