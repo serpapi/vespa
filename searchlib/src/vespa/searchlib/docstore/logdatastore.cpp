@@ -12,12 +12,15 @@
 #include <vespa/vespalib/util/benchmark_timer.h>
 #include <vespa/vespalib/util/cpu_usage.h>
 #include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/util/image_file.h>
 #include <vespa/vespalib/util/size_literals.h>
 
 #include <vespa/vespalib/stllike/hash_map.hpp>
 
+#include <fcntl.h>
 #include <filesystem>
 #include <thread>
+#include <unistd.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".searchlib.docstore.logdatastore");
@@ -53,7 +56,8 @@ LogDataStore::Config::Config()
       _minFileSizeFactor(0.2),
       _maxNumLids(DEFAULT_MAX_LIDS_PER_FILE),
       _compactCompression(CompressionConfig::LZ4),
-      _fileConfig() {
+      _fileConfig(),
+      _useImages(vespalib::image::enabled()) {
 }
 
 bool LogDataStore::Config::operator==(const Config& rhs) const {
@@ -98,7 +102,11 @@ LogDataStore::LogDataStore(vespalib::Executor& executor, const std::string& dirN
       _compactLidSpaceGeneration(),
       _last_name_id(0),
       _frozen_prev_modification_time(),
-      _frozen_prev_persisted_serial_num(0) {
+      _frozen_prev_persisted_serial_num(0),
+      _imageCapture(),
+      _imageEpoch(0),
+      _useImages(config.useImages() && !readOnly),
+      _loadedLidInfoImage(false) {
     // Reserve space for 2TB summary in order to avoid locking.
     // Even if we have reserved 16 bits for file id there is no chance that we will even get close to that.
     // Size of files grows with disk size, so 16k files should be more than sufficient.
@@ -106,8 +114,12 @@ LogDataStore::LogDataStore(vespalib::Executor& executor, const std::string& dirN
     static_assert(LidInfo::getFileIdLimit() == 65536u);
     _fileChunks.reserve(16_Ki);
 
-    preload();
-    updateLidMap(getLastFileChunkDocIdLimit());
+    NameIdSet partList = scanAndCleanParts();
+    _loadedLidInfoImage = _useImages && loadLidInfoImage(partList);
+    if (!_loadedLidInfoImage) {
+        preload(partList);
+        updateLidMap(getLastFileChunkDocIdLimit());
+    }
     updateSerialNum();
     on_freeze_prev_active();
 }
@@ -316,6 +328,7 @@ void LogDataStore::remove(uint64_t serialNum, uint32_t lid) {
         }
         lm = getActive(guard).append(serialNum, lid, {}, CpuCategory::WRITE);
         CHECK(lm.empty());
+        recordLidChange(guard, lid);
         vespalib::atomic::store_ref_release(_lidInfo[lid], lm);
     }
 }
@@ -349,6 +362,9 @@ void LogDataStore::flush(uint64_t syncToken) {
     }
     active->flushPendingChunks(syncToken);
     activeHolder.reset();
+    if (_useImages) {
+        writeLidInfoImage(syncToken);
+    }
     LOG(info, "Flushing. %s", bloatMsg(getDiskBloat(), getDiskFootprint()).c_str());
 }
 
@@ -392,6 +408,7 @@ std::pair<bool, LogDataStore::FileId> LogDataStore::findNextToCompact(bool dueTo
     }
     if (retval.first) {
         _currentlyCompacting.insert(_fileChunks[retval.second.getId()]->getNameId());
+        invalidateLidInfoImages(guard);
     }
     return retval;
 }
@@ -417,7 +434,7 @@ void LogDataStore::compactWorst(uint64_t syncToken, bool compactDiskBloat) {
     }
 }
 
-SerialNum LogDataStore::flushFile(MonitorGuard guard, WriteableFileChunk& file, SerialNum syncToken,
+SerialNum LogDataStore::flushFile(const MonitorGuard& guard, WriteableFileChunk& file, SerialNum syncToken,
                                   CpuUsage::Category cpu_category) {
     (void)guard;
     uint64_t lastSerial(file.getSerialNum());
@@ -430,7 +447,8 @@ SerialNum LogDataStore::flushFile(MonitorGuard guard, WriteableFileChunk& file, 
 
 void LogDataStore::flushFileAndWait(MonitorGuard guard, WriteableFileChunk& file, SerialNum syncToken) {
     // This function is always called in the context of compaction.
-    syncToken = flushFile(std::move(guard), file, syncToken, CpuCategory::COMPACT);
+    syncToken = flushFile(guard, file, syncToken, CpuCategory::COMPACT);
+    guard.unlock();
     file.waitForDiskToCatchUpToNow();
     _tlSyncer.sync(syncToken);
     file.flushPendingChunks(syncToken);
@@ -441,7 +459,9 @@ SerialNum LogDataStore::flushActive(SerialNum syncToken) {
     WriteableFileChunk& active = getActive(guard);
     // This is executed by an IFlushTarget (via initFlush),
     // but is a fundamental part of the WRITE pipeline of the data store.
-    return flushFile(std::move(guard), active, syncToken, CpuCategory::WRITE);
+    syncToken = flushFile(guard, active, syncToken, CpuCategory::WRITE);
+    startImageCapture(guard, syncToken);
+    return syncToken;
 }
 
 void LogDataStore::flushActiveAndWait(SerialNum syncToken) {
@@ -803,7 +823,7 @@ void LogDataStore::verifyModificationTime(const NameIdSet& partList) {
     }
 }
 
-void LogDataStore::preload() {
+LogDataStore::NameIdSet LogDataStore::scanAndCleanParts() {
     // scan directory
     NameIdSet partList = scanDir(getBaseDir(), ".idx");
     NameIdSet datPartList = scanDir(getBaseDir(), ".dat");
@@ -815,6 +835,12 @@ void LogDataStore::preload() {
     if (!partList.empty()) {
         verifyModificationTime(partList);
         partList = scanDir(getBaseDir(), ".idx");
+    }
+    return partList;
+}
+
+void LogDataStore::preload(const NameIdSet& partList) {
+    if (!partList.empty()) {
         for (auto it(partList.begin()), mt(--partList.end()); it != mt; it++) {
             _fileChunks.push_back(createReadOnlyFile(FileId(_fileChunks.size()), *it));
             _current_nameids.emplace(*it);
@@ -960,7 +986,7 @@ LogDataStore::NameIdSet LogDataStore::scanDir(const std::string& dir, const std:
 }
 
 void LogDataStore::setLid(const MonitorGuard& guard, uint32_t lid, const LidInfo& meta) {
-    (void)guard;
+    recordLidChange(guard, lid);
     if (lid < _lidInfo.size()) {
         _genHandler.update_oldest_used_generation();
         _lidInfo.reclaim_memory(_genHandler.get_oldest_used_generation());
@@ -1093,6 +1119,7 @@ void LogDataStore::accept(IDataStoreVisitor& visitor, IDataStoreVisitorProgress&
             FileChunk::UP toDie;
             {
                 MonitorGuard guard(_updateLock);
+                invalidateLidInfoImages(guard);
                 toDie = std::move(_fileChunks[fcId.getId()]);
             }
             toDie->erase();
@@ -1201,6 +1228,8 @@ size_t LogDataStore::max_file_size() const noexcept {
 void LogDataStore::compactLidSpace(uint32_t wantedDocLidLimit) {
     MonitorGuard guard(_updateLock);
     CHECK(wantedDocLidLimit <= getDocIdLimit());
+    // Lid space compaction is not in the .idx files, so an image from before it would not replay it.
+    invalidateLidInfoImages(guard);
     for (size_t i = wantedDocLidLimit; i < _lidInfo.size(); ++i) {
         vespalib::atomic::store_ref_release(_lidInfo[i], LidInfo());
     }
@@ -1262,6 +1291,403 @@ void LogDataStore::setActive(const MonitorGuard& guard, FileId fileId) {
     CHECK(hasUpdateLock(guard));
     _prevActive = _active;
     _active = fileId;
+}
+
+/*
+ * Lid map images make startup independent of the number of documents. Without one, startup reads every .idx file
+ * and replays all its entries into _lidInfo and the per file counters. An image holds _lidInfo (mapped
+ * copy-on-write at load) and the per file state that replay derives from the .idx files, as of the state that a
+ * flush made durable. Startup maps it and replays only the .idx entries written after it: the tail of the file
+ * that was active and all files created later.
+ *
+ * Capture: initFlush() closes the active chunk under _updateLock. At that moment (B) every entry in _lidInfo is
+ * in a closed chunk, and flush() persists exactly those chunks to the .idx file. The per file counters and the id
+ * of the first open chunk of the active file are recorded at B. flush() then writes _lidInfo to the image without
+ * holding _updateLock while feeding continues; setLid() and remove() log the value each lid had before they
+ * change it, and the image is patched with the first logged value per lid, giving the state at B.
+ *
+ * Files compacted away, files inserted between existing ones and lid space compaction make an image stale. Those
+ * events delete the image (and abort a capture), and the next flush writes a fresh one. Startup also checks the
+ * image against the files on disk, and reads all .idx files on any mismatch.
+ */
+
+namespace {
+
+const std::string IMAGE_FORMAT("search::LogDataStore lid map");
+constexpr uint32_t IMAGE_VERSION = 1;
+const std::string IMAGE_PREFIX("lidinfo.");
+const std::string IMAGE_SUFFIX(".img");
+const std::string IMAGE_TMP_SUFFIX(".img.tmp");
+// Lid changes logged while an image is written. Beyond this the image is skipped for this flush.
+constexpr size_t MAX_IMAGE_UNDO_ENTRIES = 4_Mi;
+
+void write_image_state(vespalib::nbostream& os, const FileChunk::ImageState& s) {
+    os << s.fileId << s.nameId << s.complete << s.numChunks << s.numLids << s.addedBytes << s.erasedCount
+       << s.erasedBytes << s.sumNumBuckets << s.numChunksWithBuckets << s.numUniqueBuckets
+       << s.lastPersistedSerialNum << s.idxHeaderLen << s.docIdLimit << s.datFileSize << s.idxFileSize << s.chunks;
+}
+
+void read_image_state(vespalib::nbostream& is, FileChunk::ImageState& s) {
+    is >> s.fileId >> s.nameId >> s.complete >> s.numChunks >> s.numLids >> s.addedBytes >> s.erasedCount >>
+        s.erasedBytes >> s.sumNumBuckets >> s.numChunksWithBuckets >> s.numUniqueBuckets >>
+        s.lastPersistedSerialNum >> s.idxHeaderLen >> s.docIdLimit >> s.datFileSize >> s.idxFileSize >> s.chunks;
+}
+
+[[noreturn]] void throw_file_error(const char* what, const std::string& path, int err) {
+    throw IllegalStateException(make_string("%s '%s' failed: %s", what, path.c_str(), getErrorString(err).c_str()));
+}
+
+void fsync_directory(const std::string& path) {
+    int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0 || ::fsync(fd) != 0) {
+        throw_file_error("fsync of", path, errno);
+    }
+    ::close(fd);
+}
+
+// Writes (offset, value) pairs in reverse order, so that the first value written for an offset is left.
+void patch_file(const std::string& path, uint64_t base, const std::vector<std::pair<uint32_t, uint64_t>>& entries) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+        throw_file_error("Open of", path, errno);
+    }
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+        off_t offset = base + uint64_t(it->first) * sizeof(uint64_t);
+        if (::pwrite(fd, &it->second, sizeof(uint64_t), offset) != ssize_t(sizeof(uint64_t))) {
+            throw_file_error("Patch of", path, errno);
+        }
+    }
+    if (::fsync(fd) != 0) {
+        throw_file_error("fsync of", path, errno);
+    }
+    ::close(fd);
+}
+
+} // namespace
+
+class LogDataStore::ImageCapture {
+public:
+    SerialNum                                  serialNum = 0;
+    uint32_t                                   docIdLimit = 0;
+    size_t                                     capacity = 0;
+    uint64_t                                   epoch = 0;
+    std::vector<FileChunk::ImageState>         files;
+    std::vector<std::pair<uint32_t, uint64_t>> undo; // (lid, value at B); the first entry per lid counts
+    bool                                       overflow = false;
+};
+
+std::string LogDataStore::createImageFileName(SerialNum serialNum) const {
+    return getBaseDir() + "/" + IMAGE_PREFIX + std::to_string(serialNum) + IMAGE_SUFFIX;
+}
+
+std::map<SerialNum, std::string> LogDataStore::findImageFiles() const {
+    std::map<SerialNum, std::string> images;
+    for (const auto& entry : fs::directory_iterator(fs::path(getBaseDir()))) {
+        std::string name = entry.path().filename().string();
+        if (!entry.is_regular_file() || !name.starts_with(IMAGE_PREFIX) || !name.ends_with(IMAGE_SUFFIX)) {
+            continue;
+        }
+        std::string digits =
+            name.substr(IMAGE_PREFIX.size(), name.size() - IMAGE_PREFIX.size() - IMAGE_SUFFIX.size());
+        char*       end = nullptr;
+        errno = 0;
+        SerialNum serialNum = strtoull(digits.c_str(), &end, 10);
+        if (digits.empty() || errno != 0 || *end != '\0') {
+            throw IllegalStateException(make_string("Unexpected lid map image file name '%s'", entry.path().c_str()));
+        }
+        images[serialNum] = entry.path().string();
+    }
+    return images;
+}
+
+void LogDataStore::invalidateLidInfoImages(const MonitorGuard& guard) {
+    CHECK(hasUpdateLock(guard));
+    ++_imageEpoch;
+    _imageCapture.reset();
+    if (_useImages) {
+        for (const auto& image : findImageFiles()) {
+            LOG(debug, "Removing lid map image '%s'", image.second.c_str());
+            fs::remove(fs::path(image.second));
+        }
+    }
+}
+
+void LogDataStore::startImageCapture(const MonitorGuard& guard, SerialNum syncToken) {
+    CHECK(hasUpdateLock(guard));
+    _imageCapture.reset();
+    if (!_useImages) {
+        return;
+    }
+    if ((_prevActive != FileId::active()) || !_currentlyCompacting.empty()) {
+        LOG(debug, "No lid map image at serial %" PRIu64 ": a file is being frozen or compacted", syncToken);
+        return;
+    }
+    auto capture = std::make_shared<ImageCapture>();
+    capture->serialNum = syncToken;
+    capture->docIdLimit = getDocIdLimit();
+    capture->capacity = _lidInfo.capacity();
+    capture->epoch = _imageEpoch;
+    for (const auto& fc : _fileChunks) {
+        if (!fc) {
+            continue;
+        }
+        FileChunk::ImageState state = fc->get_image_state();
+        if (fc->getFileId() == _active) {
+            state.complete = false;
+            state.numChunks = getActive(guard).active_chunk_id();
+        } else {
+            if (!fc->frozen()) {
+                LOG(debug, "No lid map image at serial %" PRIu64 ": file '%s' is not frozen", syncToken,
+                    fc->getName().c_str());
+                return;
+            }
+            state.complete = true;
+            state.numChunks = fc->getNumChunks();
+        }
+        capture->files.push_back(state);
+    }
+    _imageCapture = std::move(capture);
+}
+
+void LogDataStore::recordLidChange(const MonitorGuard& guard, uint32_t lid) {
+    (void)guard;
+    ImageCapture* capture = _imageCapture.get();
+    if ((capture == nullptr) || (lid >= capture->docIdLimit) || capture->overflow) {
+        return;
+    }
+    if (capture->undo.size() >= MAX_IMAGE_UNDO_ENTRIES) {
+        capture->overflow = true;
+        capture->undo = {};
+        return;
+    }
+    capture->undo.emplace_back(lid, uint64_t(vespalib::atomic::load_ref_relaxed(_lidInfo[lid])));
+}
+
+void LogDataStore::writeLidInfoImage(SerialNum syncToken) {
+    vespalib::BenchmarkTimer                      timer(0.0);
+    std::shared_ptr<ImageCapture>                 capture;
+    std::vector<FileChunk::ImageState>            states;
+    std::vector<const FileChunk*>                 files;
+    std::vector<std::unique_ptr<FileChunkHolder>> holders;
+    vespalib::GenerationGuard                     lidGuard;
+    timer.before();
+    {
+        MonitorGuard guard(_updateLock);
+        capture = _imageCapture;
+        if (!capture || (capture->serialNum != syncToken) || (capture->epoch != _imageEpoch) ||
+            !_currentlyCompacting.empty())
+        {
+            _imageCapture.reset();
+            return;
+        }
+        // Files are only dropped by compaction and pruning, which bump _imageEpoch.
+        for (const auto& state : capture->files) {
+            const FileChunk* fc = _fileChunks[state.fileId].get();
+            CHECK((fc != nullptr) && (fc->getNameId().getId() == state.nameId));
+            files.push_back(fc);
+            holders.push_back(holdFileChunk(guard, FileId(state.fileId)));
+        }
+        states = capture->files;
+        lidGuard = _genHandler.takeGuard();
+    }
+    const std::string finalName = createImageFileName(syncToken);
+    const std::string tmpName = finalName.substr(0, finalName.size() - IMAGE_SUFFIX.size()) + IMAGE_TMP_SUFFIX;
+    auto              writer = std::make_unique<vespalib::image::ImageWriter>(tmpName);
+    bool              complete = true;
+    for (size_t i = 0; complete && i < states.size(); ++i) {
+        FileChunk::ImageState& state = states[i];
+        if (state.complete) {
+            std::string name = files[i]->getName();
+            state.datFileSize = fs::file_size(fs::path(FileChunk::createDatFileName(name)));
+            state.idxFileSize = fs::file_size(fs::path(FileChunk::createIdxFileName(name)));
+        }
+        complete = files[i]->save_image_chunks(*writer, state);
+    }
+    // Written while feeding goes on: lids changed meanwhile are patched below with their value at B.
+    std::span<const uint64_t> lids = _lidInfo.make_read_view(capture->docIdLimit);
+    vespalib::image::Section  lidSection = writer->write_section(lids.data(), lids.size() * sizeof(uint64_t));
+    std::vector<std::pair<uint32_t, uint64_t>> undo;
+    {
+        MonitorGuard guard(_updateLock);
+        bool         current = (_imageCapture == capture) && (capture->epoch == _imageEpoch) && !capture->overflow &&
+                       _currentlyCompacting.empty();
+        if (current) {
+            undo = std::move(capture->undo);
+        }
+        if (_imageCapture == capture) {
+            _imageCapture.reset();
+        }
+        complete = complete && current;
+    }
+    lidGuard = vespalib::GenerationGuard();
+    holders.clear();
+    if (!complete) {
+        writer.reset();
+        fs::remove(fs::path(tmpName));
+        LOG(debug, "No lid map image at serial %" PRIu64 ": state changed while writing it", syncToken);
+        return;
+    }
+    auto& meta = writer->meta();
+    meta << IMAGE_FORMAT << IMAGE_VERSION << syncToken << capture->docIdLimit << uint32_t(states.size());
+    for (const auto& state : states) {
+        write_image_state(meta, state);
+    }
+    // Same layout as TypeStableVectorBase::save_image(), so that _lidInfo.load_image() reads it.
+    meta << uint64_t(lids.size()) << uint64_t(std::max(capture->capacity, lids.size())) << lidSection;
+    uint64_t imageBytes = writer->finish();
+    writer.reset();
+    if (!undo.empty()) {
+        patch_file(tmpName, lidSection.offset, undo);
+    }
+    {
+        // Under the lock, so that an event making images stale either sees this image and removes it, or is seen.
+        MonitorGuard guard(_updateLock);
+        if (capture->epoch != _imageEpoch) {
+            fs::remove(fs::path(tmpName));
+            LOG(debug, "No lid map image at serial %" PRIu64 ": state changed while writing it", syncToken);
+            return;
+        }
+        fs::rename(fs::path(tmpName), fs::path(finalName));
+    }
+    fsync_directory(getBaseDir());
+    for (const auto& image : findImageFiles()) {
+        if (image.second != finalName) {
+            fs::remove(fs::path(image.second));
+        }
+    }
+    timer.after();
+    LOG(info, "Wrote lid map image '%s': %" PRIu64 " bytes, %u lids, %zu files, %zu lids patched, %.3f s",
+        finalName.c_str(), imageBytes, capture->docIdLimit, states.size(), undo.size(), timer.min_time());
+}
+
+bool LogDataStore::loadLidInfoImage(const NameIdSet& partList) {
+    for (const auto& entry : fs::directory_iterator(fs::path(getBaseDir()))) {
+        if (entry.path().filename().string().ends_with(IMAGE_TMP_SUFFIX)) {
+            LOG(info, "Removing incomplete lid map image '%s'", entry.path().c_str());
+            fs::remove(entry.path());
+        }
+    }
+    auto images = findImageFiles();
+    if (images.empty()) {
+        LOG(info, "No lid map image in '%s', reading all .idx files", getBaseDir().c_str());
+        return false;
+    }
+    vespalib::BenchmarkTimer timer(0.0);
+    timer.before();
+    const std::string&           path = images.rbegin()->second;
+    vespalib::image::ImageReader reader(path);
+    auto&                        meta = reader.meta();
+    std::string                  format;
+    uint32_t                     version = 0;
+    SerialNum                    serialNum = 0;
+    uint32_t                     docIdLimit = 0;
+    uint32_t                     numFiles = 0;
+    meta >> format >> version >> serialNum >> docIdLimit >> numFiles;
+    if ((format != IMAGE_FORMAT) || (version != IMAGE_VERSION)) {
+        throw IllegalStateException(
+            make_string("'%s' is not a lid map image of version %u", path.c_str(), IMAGE_VERSION));
+    }
+    std::vector<FileChunk::ImageState>                states(numFiles);
+    std::map<uint64_t, const FileChunk::ImageState*> byName;
+    std::set<uint32_t>                                fileIds;
+    uint32_t                                          fileIdLimit = 0;
+    for (auto& state : states) {
+        read_image_state(meta, state);
+        if ((state.fileId >= _fileChunks.capacity()) || !fileIds.insert(state.fileId).second ||
+            !byName.emplace(state.nameId, &state).second)
+        {
+            throw IllegalStateException(make_string("Lid map image '%s' has a bad file list", path.c_str()));
+        }
+        fileIdLimit = std::max(fileIdLimit, state.fileId + 1);
+    }
+    auto mismatch = [&](const std::string& reason) {
+        LOG(warning, "Not using lid map image '%s': %s. Reading all .idx files", path.c_str(), reason.c_str());
+        return false;
+    };
+    if (partList.empty()) {
+        return mismatch("there are no files");
+    }
+    const NameId lastName = *partList.rbegin();
+    for (const auto& state : states) {
+        NameId      nameId(state.nameId);
+        std::string name = createFileName(nameId);
+        if (!partList.contains(nameId)) {
+            if (state.numChunks == 0) {
+                continue; // Empty files are removed during load
+            }
+            return mismatch(make_string("file '%s' is missing", name.c_str()));
+        }
+        if (state.complete && ((fs::file_size(fs::path(FileChunk::createDatFileName(name))) != state.datFileSize) ||
+                               (fs::file_size(fs::path(FileChunk::createIdxFileName(name))) != state.idxFileSize)))
+        {
+            return mismatch(make_string("file '%s' has changed", name.c_str()));
+        }
+        if ((!state.complete || (nameId == lastName)) &&
+            !FileChunk::idx_starts_with_image_chunks(name, reader, state))
+        {
+            return mismatch(make_string("file '%s' does not start with the chunks in the image", name.c_str()));
+        }
+    }
+    uint64_t lastImageName = byName.empty() ? 0 : byName.rbegin()->first;
+    for (NameId nameId : partList) {
+        if (!byName.contains(nameId.getId()) && !(lastImageName < nameId.getId())) {
+            return mismatch(make_string("file '%s' is older than the image", createFileName(nameId).c_str()));
+        }
+    }
+
+    // The image matches the files. Files in the image keep their file ids, which _lidInfo refers to.
+    std::vector<FileId> nameOrder;
+    for (NameId nameId : partList) {
+        auto   found = byName.find(nameId.getId());
+        FileId fileId = (found != byName.end()) ? FileId(found->second->fileId) : FileId(fileIdLimit++);
+        CHECK(fileId.getId() < _fileChunks.capacity());
+        if (fileId.getId() >= _fileChunks.size()) {
+            _fileChunks.resize(fileId.getId() + 1);
+        }
+        const FileChunk* prev = nameOrder.empty() ? nullptr : _fileChunks[nameOrder.back().getId()].get();
+        _fileChunks[fileId.getId()] =
+            (nameId == lastName)
+                ? createWritableFile(fileId, (prev != nullptr) ? prev->getLastPersistedSerialNum() : 0, nameId)
+                : createReadOnlyFile(fileId, nameId);
+        CHECK(_fileChunks[fileId.getId()]);
+        _current_nameids.emplace(nameId);
+        nameOrder.push_back(fileId);
+    }
+    _last_name_id = lastName;
+    _active = nameOrder.back();
+    _prevActive = (nameOrder.size() > 1) ? nameOrder[nameOrder.size() - 2] : FileId::active();
+    for (const auto& state : states) {
+        auto& fc = _fileChunks[state.fileId];
+        if (fc) {
+            fc->load_image(reader, state, !state.complete || (fc->getFileId() == _active));
+        }
+    }
+    _lidInfo.load_image(reader);
+    if (_lidInfo.size() != docIdLimit) {
+        throw IllegalStateException(make_string("Lid map image '%s' has %zu lids, expected %u", path.c_str(),
+                                                _lidInfo.size(), docIdLimit));
+    }
+    setDocIdLimit(docIdLimit);
+
+    // Replay what the image does not hold, in file order like updateLidMap().
+    size_t       replayedFiles = 0;
+    MonitorGuard guard(_updateLock);
+    uint32_t     lastFileChunkDocIdLimit = _fileChunks[_active.getId()]->getDocIdLimit();
+    uint64_t     lastSerialNum = 0;
+    for (FileId fileId : nameOrder) {
+        FileChunk& fc = *_fileChunks[fileId.getId()];
+        auto       found = byName.find(fc.getNameId().getId());
+        if ((found == byName.end()) || !found->second->complete || (fileId == _active)) {
+            uint32_t limit = (fileId == _active) ? std::numeric_limits<uint32_t>::max() : lastFileChunkDocIdLimit;
+            fc.updateLidMap(guard, *this, lastSerialNum, limit);
+            ++replayedFiles;
+        }
+        lastSerialNum = fc.getLastPersistedSerialNum();
+    }
+    timer.after();
+    LOG(info, "Loaded lid map image '%s' (serial %" PRIu64 ", %u lids, %u files), replayed %zu of %zu files, %.3f s",
+        path.c_str(), serialNum, docIdLimit, numFiles, replayedFiles, nameOrder.size(), timer.min_time());
+    return true;
 }
 
 } // namespace search

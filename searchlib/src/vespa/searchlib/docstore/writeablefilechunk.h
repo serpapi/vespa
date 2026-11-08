@@ -69,6 +69,9 @@ public:
     void waitForDiskToCatchUpToNow() const;
     void flushPendingChunks(uint64_t serialNum);
     DataStoreFileChunkStats getStats() const override;
+    [[nodiscard]] bool save_image_chunks(vespalib::image::ImageWriter& writer, ImageState& state) const override;
+    // Id of the chunk that appends go to; lower ids are closed. Caller holds the data store's update lock.
+    uint32_t active_chunk_id() const;
 
     static uint64_t writeIdxHeader(const common::FileHeaderContext& fileHeaderContext, uint32_t docIdLimit,
                                    FastOS_FileInterface& file);

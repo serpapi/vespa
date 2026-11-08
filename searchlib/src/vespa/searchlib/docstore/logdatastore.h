@@ -17,6 +17,7 @@
 #include <vespa/vespalib/util/generationhandler.h>
 #include <vespa/vespalib/util/type_stable_vector.h>
 
+#include <map>
 #include <set>
 
 namespace search {
@@ -71,6 +72,11 @@ public:
             _fileConfig = v;
             return *this;
         }
+        // Lid map images (see LogDataStore::writeLidInfoImage()). Defaults to vespalib::image::enabled().
+        Config& setUseImages(bool v) {
+            _useImages = v;
+            return *this;
+        }
 
         size_t getMaxFileSize() const { return _maxFileSize; }
         double getMaxBucketSpread() const noexcept { return _maxBucketSpread.load_relaxed(); }
@@ -80,6 +86,7 @@ public:
         CompressionConfig compactCompression() const { return _compactCompression; }
 
         const WriteableFileChunk::Config& getFileConfig() const { return _fileConfig; }
+        bool useImages() const { return _useImages; }
 
         bool operator==(const Config&) const;
 
@@ -90,6 +97,7 @@ public:
         uint32_t                   _maxNumLids;
         CompressionConfig          _compactCompression;
         WriteableFileChunk::Config _fileConfig;
+        bool                       _useImages;
     };
 
 public:
@@ -198,11 +206,14 @@ public:
 
     NameIdSet getAllActiveFiles() const;
     void reconfigure(const Config& config);
+    // Whether startup used a lid map image instead of reading all .idx files.
+    [[nodiscard]] bool loaded_lid_info_image() const noexcept { return _loadedLidInfoImage; }
 
 private:
     class WrapVisitor;
     class WrapVisitorProgress;
     class FileChunkHolder;
+    class ImageCapture;
 
     void setLid(const ISetLid::unique_lock& guard, uint32_t lid, const LidInfo& lm) override;
 
@@ -213,7 +224,8 @@ private:
     using FileChunkVector = std::vector<FileChunk::UP>;
 
     void updateLidMap(uint32_t lastFileChunkDocIdLimit);
-    void preload();
+    NameIdSet scanAndCleanParts();
+    void preload(const NameIdSet& partList);
     uint32_t getLastFileChunkDocIdLimit();
     void verifyModificationTime(const NameIdSet& partList);
 
@@ -257,7 +269,7 @@ private:
     void unholdFileChunk(FileId fileId);
     bool canFileChunkBeDropped(const MonitorGuard& guard, FileId fileId) const;
 
-    SerialNum flushFile(MonitorGuard guard, WriteableFileChunk& file, SerialNum syncToken,
+    SerialNum flushFile(const MonitorGuard& guard, WriteableFileChunk& file, SerialNum syncToken,
                         vespalib::CpuUsage::Category cpu_category);
     SerialNum flushActive(SerialNum syncToken);
     void flushActiveAndWait(SerialNum syncToken);
@@ -270,6 +282,15 @@ private:
     std::pair<bool, FileId> findNextToCompact(bool compactDiskBloat);
     void incGeneration();
     bool canShrinkLidSpace(const MonitorGuard& guard) const;
+
+    // Lid map images: see the comment above writeLidInfoImage() in logdatastore.cpp.
+    bool loadLidInfoImage(const NameIdSet& partList);
+    void startImageCapture(const MonitorGuard& guard, SerialNum syncToken);
+    void recordLidChange(const MonitorGuard& guard, uint32_t lid);
+    void writeLidInfoImage(SerialNum syncToken);
+    void invalidateLidInfoImages(const MonitorGuard& guard);
+    std::string createImageFileName(SerialNum serialNum) const;
+    std::map<SerialNum, std::string> findImageFiles() const;
 
     using FileIdxVector = std::vector<FileId>;
     Config                                   _config;
@@ -294,6 +315,10 @@ private:
     NameId                                   _last_name_id;
     vespalib::system_time                    _frozen_prev_modification_time;
     SerialNum                                _frozen_prev_persisted_serial_num;
+    std::shared_ptr<ImageCapture>            _imageCapture; // Protected by _updateLock
+    uint64_t _imageEpoch; // Protected by _updateLock. Bumped by events that make lid map images stale.
+    const bool _useImages;
+    bool       _loadedLidInfoImage;
 };
 
 } // namespace search

@@ -931,6 +931,32 @@ vespalib::system_time WriteableFileChunk::unconditionallyFlushPendingChunks(cons
     return timeStamp;
 }
 
+bool WriteableFileChunk::save_image_chunks(vespalib::image::ImageWriter& writer, ImageState& state) const {
+    if (frozen()) {
+        return FileChunk::save_image_chunks(writer, state);
+    }
+    ChunkInfoVector chunks;
+    {
+        std::lock_guard guard(_lock);
+        if (state.numChunks > _chunkInfo.size()) {
+            return false;
+        }
+        chunks.assign(_chunkInfo.begin(), _chunkInfo.begin() + state.numChunks);
+    }
+    for (const ChunkInfo& chunk : chunks) {
+        if (!chunk.valid()) {
+            return false;
+        }
+    }
+    state.chunks = writer.write_section(chunks.data(), chunks.size() * sizeof(ChunkInfo));
+    return true;
+}
+
+uint32_t WriteableFileChunk::active_chunk_id() const {
+    std::lock_guard guard(_lock);
+    return _active->getId();
+}
+
 DataStoreFileChunkStats WriteableFileChunk::getStats() const {
     DataStoreFileChunkStats stats = FileChunk::getStats();
     uint64_t                serialNum = getSerialNum();

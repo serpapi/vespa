@@ -11,6 +11,7 @@
 #include <vespa/vespalib/stllike/hash_map.h>
 #include <vespa/vespalib/util/cpu_usage.h>
 #include <vespa/vespalib/util/generation_guard.h>
+#include <vespa/vespalib/util/image_file.h>
 #include <vespa/vespalib/util/memoryusage.h>
 #include <vespa/vespalib/util/time.h>
 
@@ -206,6 +207,42 @@ public:
 
     virtual DataStoreFileChunkStats getStats() const;
 
+    /*
+     * Lid map images (see LogDataStore). ImageState holds what updateLidMap() derives from the .idx file: the
+     * counters, and the first numChunks chunk infos, which are saved as an image section.
+     */
+    struct ImageState {
+        uint32_t                 fileId = 0;
+        uint64_t                 nameId = 0;
+        bool                     complete = false; // All chunks of a frozen file, else a prefix of the active file
+        uint32_t                 numChunks = 0;
+        uint32_t                 numLids = 0;
+        uint64_t                 addedBytes = 0;
+        uint64_t                 erasedCount = 0;
+        uint64_t                 erasedBytes = 0;
+        uint64_t                 sumNumBuckets = 0;
+        uint64_t                 numChunksWithBuckets = 0;
+        uint64_t                 numUniqueBuckets = 0;
+        uint64_t                 lastPersistedSerialNum = 0;
+        uint32_t                 idxHeaderLen = 0;
+        uint32_t                 docIdLimit = 0;
+        uint64_t                 datFileSize = 0; // Complete files only
+        uint64_t                 idxFileSize = 0; // Complete files only
+        vespalib::image::Section chunks;
+    };
+    // Caller holds the data store's update lock, so that the erased counters match its lid map.
+    ImageState get_image_state() const;
+    // Saves the first state.numChunks chunk infos. Returns false if some of them are not written yet.
+    [[nodiscard]] virtual bool save_image_chunks(vespalib::image::ImageWriter& writer, ImageState& state) const;
+    /*
+     * Restores state saved by save_image_chunks(). If replayFollows, updateLidMap() is called next: it skips the
+     * restored chunks (only recomputing bucket counts and the last persisted serial number) and replays the rest.
+     */
+    void load_image(const vespalib::image::ImageReader& reader, const ImageState& state, bool replayFollows);
+    // Whether the .idx file of the named file starts with the chunks saved in state.
+    static bool idx_starts_with_image_chunks(const std::string& name, const vespalib::image::ImageReader& reader,
+                                             const ImageState& state);
+
     /**
      * Read header and return number of bytes it consists of.
      */
@@ -226,8 +263,11 @@ private:
     uint64_t handleChunk(const unique_lock& guard, ISetLid& lidMap, uint32_t docIdLimit,
                          const BucketizerGuard& bucketizerGuard, BucketDensityComputer& global,
                          const TmpChunkMeta& chunkMeta);
+    uint64_t skipImageChunk(uint32_t docIdLimit, const BucketizerGuard& bucketizerGuard,
+                            BucketDensityComputer& global, const TmpChunkMeta& chunkMeta, size_t chunkId);
     using File = std::unique_ptr<FileRandRead>;
     const FileId          _fileId;
+    uint32_t              _imageChunks; // Chunk infos restored by load_image()
     const NameId          _nameId;
     const std::string     _name;
     std::atomic<size_t>   _erasedCount;

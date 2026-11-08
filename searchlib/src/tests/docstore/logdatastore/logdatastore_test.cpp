@@ -25,6 +25,8 @@
 #include <vespa/vespalib/util/size_literals.h>
 #include <vespa/vespalib/util/threadstackexecutor.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <random>
@@ -1086,7 +1088,7 @@ TEST_F(LogDataStoreTest, require_that_there_is_control_of_static_memory_usage) {
     auto                  tmp7 = build_testdata() + "/tmp7";
     Fixture               f(tmp7);
     vespalib::MemoryUsage usage = f.store.getMemoryUsage();
-    EXPECT_EQ(480u + 2 * sizeof(LogDataStore::NameIdSet) + sizeof(std::mutex) + sizeof(std::condition_variable) +
+    EXPECT_EQ(520u + 2 * sizeof(LogDataStore::NameIdSet) + sizeof(std::mutex) + sizeof(std::condition_variable) +
                   sizeof(std::string),
               sizeof(LogDataStore));
     EXPECT_EQ(139460u + 3 * sizeof(std::string), usage.allocatedBytes());
@@ -1238,6 +1240,313 @@ void write_with_missing_idx_file(const std::string& dir) {
 TEST_F(LogDataStoreTest, fail_if_active_idx_files_disappears) {
     auto dir = build_testdata() + "/tmp10";
     VESPA_EXPECT_EXCEPTION(write_with_missing_idx_file(dir), SummaryException, "Failed opening idx file");
+    std::filesystem::remove_all(dir);
+}
+
+namespace {
+
+// Pseudo random, so that chunks do not compress and data spreads over several files.
+std::string genImageTestData(uint32_t lid, uint32_t version, size_t numBytes = 300) {
+    std::mt19937 rng(lid * 7919u + version);
+    std::string  data(numBytes, '\0');
+    for (char& c : data) {
+        c = 'a' + char(rng() % 26);
+    }
+    return data;
+}
+
+std::vector<std::string> list_lid_info_images(const std::string& dir) {
+    std::vector<std::string> images;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path(dir))) {
+        auto name = entry.path().filename().string();
+        if (name.starts_with("lidinfo.") && name.ends_with(".img")) {
+            images.push_back(name);
+        }
+    }
+    return images;
+}
+
+struct ImageFixture {
+    vespalib::ThreadStackExecutor executor;
+    DummyFileHeaderContext        fileHeaderCtx;
+    MyTlSyncer                    tlSyncer;
+    LogDataStore                  store;
+
+    ImageFixture(const std::string& dir, bool useImages)
+        : executor(1),
+          fileHeaderCtx(),
+          tlSyncer(),
+          store(executor, dir, getBasicConfig(32_Ki).setUseImages(useImages), GrowStrategy(), TuneFileSummary(),
+                fileHeaderCtx, tlSyncer, nullptr) {}
+    ~ImageFixture();
+    void write(uint32_t lid, uint32_t version) {
+        std::string data = genImageTestData(lid, version);
+        store.write(store.tentativeLastSyncToken() + 1, lid, data.c_str(), data.size());
+    }
+    void remove(uint32_t lid) { store.remove(store.tentativeLastSyncToken() + 1, lid); }
+    void flush() {
+        uint64_t syncToken = store.initFlush(store.tentativeLastSyncToken());
+        store.flush(syncToken);
+    }
+};
+
+ImageFixture::~ImageFixture() = default;
+
+std::string describe_content(LogDataStore& store) {
+    std::ostringstream os;
+    os << "docIdLimit=" << store.getDocIdLimit() << "\n";
+    for (uint32_t lid = 0; lid < store.getDocIdLimit(); ++lid) {
+        vespalib::DataBuffer buffer;
+        ssize_t             size = store.read(lid, buffer);
+        os << lid << ":" << size << ":" << std::string(buffer.getData(), buffer.getDataLen()) << "\n";
+    }
+    return os.str();
+}
+
+// Everything observable that startup derives from the .idx files.
+std::string describe(LogDataStore& store) {
+    std::ostringstream os;
+    auto               stats = store.getStorageStats();
+    os << "docIdLimit=" << store.getDocIdLimit() << " lastSyncToken=" << store.lastSyncToken()
+       << " tentativeLastSyncToken=" << store.tentativeLastSyncToken() << " diskUsage=" << stats.diskUsage()
+       << " sizeOnDisk=" << stats.size_on_disk() << " bloat=" << stats.diskBloat()
+       << " spread=" << stats.maxBucketSpread() << " headerFootprint=" << store.getDiskHeaderFootprint()
+       << " visitCost=" << store.getVisitCost() << "\n";
+    for (const auto& chunk : store.getFileChunkStats()) {
+        os << "file " << chunk.nameId() << " usage=" << chunk.diskUsage() << " sizeOnDisk=" << chunk.size_on_disk()
+           << " bloat=" << chunk.diskBloat() << " spread=" << chunk.maxBucketSpread()
+           << " lastSerial=" << chunk.lastSerialNum() << " lastFlushedSerial=" << chunk.lastFlushedSerialNum()
+           << " docIdLimit=" << chunk.docIdLimit() << "\n";
+    }
+    os << describe_content(store);
+    return os.str();
+}
+
+std::string describe_reopened(const std::string& dir, bool useImages, bool expectImage) {
+    ImageFixture f(dir, useImages);
+    EXPECT_EQ(expectImage, f.store.loaded_lid_info_image());
+    return describe(f.store);
+}
+
+} // namespace
+
+TEST_F(LogDataStoreTest, restart_from_lid_map_image_matches_restart_from_idx_files) {
+    auto dir = build_testdata() + "/image1";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    size_t numFilesAtImage = 0;
+    {
+        ImageFixture f(dir, true);
+        EXPECT_FALSE(f.store.loaded_lid_info_image());
+        for (uint32_t lid = 1; lid <= 1500; ++lid) {
+            f.write(lid, 0);
+        }
+        for (uint32_t lid = 1; lid <= 1500; lid += 7) {
+            f.write(lid, 1);
+        }
+        for (uint32_t lid = 3; lid <= 1500; lid += 11) {
+            f.remove(lid);
+        }
+        f.flush();
+        numFilesAtImage = f.store.getFileChunkStats().size();
+        EXPECT_LT(5u, numFilesAtImage);
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        // Not flushed: replayed from the .idx files after the image, as far as they got there.
+        for (uint32_t lid = 1400; lid <= 1800; ++lid) {
+            f.write(lid, 2);
+        }
+        for (uint32_t lid = 5; lid <= 1500; lid += 13) {
+            f.remove(lid);
+        }
+        EXPECT_LT(numFilesAtImage, f.store.getFileChunkStats().size());
+    }
+    std::string fromImage = describe_reopened(dir, true, true);
+    std::string fromIdx = describe_reopened(dir, false, false);
+    EXPECT_EQ(fromIdx, fromImage);
+    EXPECT_EQ(fromIdx, describe_reopened(dir, true, true));
+    // Writes after the image that reached .idx files (when the active file was full) were replayed.
+    size_t replayed = 0;
+    for (uint32_t lid = 1400; lid <= 1800; ++lid) {
+        if (fromImage.find(std::to_string(lid) + ":300:" + genImageTestData(lid, 2)) != std::string::npos) {
+            ++replayed;
+        }
+    }
+    EXPECT_LT(100u, replayed);
+
+    // Writes after a restart from the image are kept, and the next flush writes a new image.
+    {
+        ImageFixture f(dir, true);
+        EXPECT_TRUE(f.store.loaded_lid_info_image());
+        for (uint32_t lid = 1; lid <= 2000; lid += 3) {
+            f.write(lid, 3);
+        }
+        f.remove(2);
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+    }
+    fromImage = describe_reopened(dir, true, true);
+    fromIdx = describe_reopened(dir, false, false);
+    EXPECT_EQ(fromIdx, fromImage);
+    EXPECT_NE(std::string::npos, fromImage.find("1999:300:" + genImageTestData(1999, 3)));
+    EXPECT_NE(std::string::npos, fromImage.find("2:0:\n"));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_holds_the_state_at_init_flush) {
+    auto dir = build_testdata() + "/image4";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    {
+        ImageFixture f(dir, true);
+        for (uint32_t lid = 1; lid <= 1000; ++lid) {
+            f.write(lid, 0);
+        }
+        uint64_t syncToken = f.store.initFlush(f.store.tentativeLastSyncToken());
+        // Changed after the state that this flush makes durable: the image must hold the earlier values.
+        for (uint32_t lid = 1; lid <= 1000; lid += 5) {
+            f.write(lid, 1);
+        }
+        for (uint32_t lid = 2; lid <= 1000; lid += 9) {
+            f.remove(lid);
+        }
+        f.write(1200, 1);
+        f.store.flush(syncToken);
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+    }
+    std::string fromImage = describe_reopened(dir, true, true);
+    EXPECT_EQ(describe_reopened(dir, false, false), fromImage);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_F(LogDataStoreTest, stale_lid_map_image_is_not_used) {
+    auto dir = build_testdata() + "/image2";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    {
+        ImageFixture f(dir, true);
+        for (uint32_t lid = 1; lid <= 1500; ++lid) {
+            f.write(lid, 0);
+        }
+        for (uint32_t lid = 1; lid <= 300; ++lid) {
+            f.write(lid, 1);
+        }
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+    }
+    {
+        // Compaction without images enabled leaves the image, which now refers to a removed file.
+        ImageFixture f(dir, false);
+        auto         filesBefore = f.store.getAllActiveFiles();
+        f.store.compactBloat(f.store.tentativeLastSyncToken());
+        EXPECT_NE(filesBefore, f.store.getAllActiveFiles());
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+    }
+    std::string fromIdx = describe_reopened(dir, false, false);
+    EXPECT_EQ(fromIdx, describe_reopened(dir, true, false));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_F(LogDataStoreTest, lid_map_image_is_removed_by_compaction_and_written_again_by_next_flush) {
+    auto dir = build_testdata() + "/image3";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    std::string content;
+    {
+        ImageFixture f(dir, true);
+        for (uint32_t lid = 1; lid <= 1500; ++lid) {
+            f.write(lid, 0);
+        }
+        for (uint32_t lid = 1; lid <= 300; ++lid) {
+            f.write(lid, 1);
+        }
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        f.store.compactLidSpace(1400);
+        EXPECT_EQ(0u, list_lid_info_images(dir).size());
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        f.store.compactBloat(f.store.tentativeLastSyncToken());
+        EXPECT_EQ(0u, list_lid_info_images(dir).size());
+        f.write(1600, 0);
+        f.flush();
+        EXPECT_EQ(1u, list_lid_info_images(dir).size());
+        content = describe_content(f.store);
+    }
+    /*
+     * A restart from .idx files brings back the entries that compactLidSpace() dropped (lids 1400 to 1500) from
+     * older files, a restart from the image keeps the state the store had.
+     */
+    ImageFixture f(dir, true);
+    EXPECT_TRUE(f.store.loaded_lid_info_image());
+    EXPECT_EQ(content, describe_content(f.store));
+    std::filesystem::remove_all(dir);
+}
+
+namespace {
+
+double open_seconds(const std::string& dir, bool useImages, bool expectImage) {
+    vespalib::ThreadStackExecutor executor(1);
+    DummyFileHeaderContext        fileHeaderCtx;
+    MyTlSyncer                    tlSyncer;
+    auto                          start = std::chrono::steady_clock::now();
+    LogDataStore store(executor, dir, LogDataStore::Config().setUseImages(useImages), GrowStrategy(),
+                       TuneFileSummary(), fileHeaderCtx, tlSyncer, nullptr);
+    std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+    double                        seconds = elapsed.count();
+    EXPECT_EQ(expectImage, store.loaded_lid_info_image());
+    return seconds;
+}
+
+} // namespace
+
+// Startup time with and without a lid map image. Run with --gtest_also_run_disabled_tests, LDS_IMAGE_BENCH_DOCS=N.
+TEST_F(LogDataStoreTest, DISABLED_benchmark_startup_with_lid_map_image) {
+    const char* docsEnv = std::getenv("LDS_IMAGE_BENCH_DOCS");
+    uint32_t    numDocs = (docsEnv != nullptr) ? std::stoul(docsEnv) : 5000000u;
+    auto        dir = build_testdata() + "/image_bench";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    {
+        vespalib::ThreadStackExecutor executor(1);
+        DummyFileHeaderContext        fileHeaderCtx;
+        MyTlSyncer                    tlSyncer;
+        LogDataStore store(executor, dir, LogDataStore::Config().setUseImages(true), GrowStrategy(),
+                           TuneFileSummary(), fileHeaderCtx, tlSyncer, nullptr);
+        uint64_t     serial = 0;
+        std::mt19937 rng(42);
+        std::string  data(64, '\0');
+        auto         write = [&](uint32_t lid) {
+            for (char& c : data) {
+                c = 'a' + char(rng() % 26);
+            }
+            store.write(++serial, lid, data.c_str(), data.size());
+        };
+        for (uint32_t lid = 1; lid <= numDocs; ++lid) {
+            write(lid);
+        }
+        for (uint32_t lid = 1; lid <= numDocs; lid += 20) {
+            store.remove(++serial, lid);
+        }
+        auto     start = std::chrono::steady_clock::now();
+        uint64_t syncToken = store.initFlush(serial);
+        store.flush(syncToken);
+        double flushSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        for (uint32_t lid = 1; lid <= 100000; ++lid) {
+            write(lid * 7 % numDocs + 1);
+        }
+        syncToken = store.initFlush(serial);
+        store.flush(syncToken);
+        fprintf(stdout, "docs=%u files=%zu flush with image %.3f s, images=%zu\n", numDocs,
+                store.getFileChunkStats().size(), flushSeconds, list_lid_info_images(dir).size());
+        for (uint32_t lid = 1; lid <= 100000; ++lid) {
+            write(lid * 13 % numDocs + 1);
+        }
+    }
+    for (int round = 0; round < 3; ++round) {
+        double stock = open_seconds(dir, false, false);
+        double image = open_seconds(dir, true, true);
+        fprintf(stdout, "round %d: open from .idx files %.3f s, open from image %.3f s\n", round, stock, image);
+    }
     std::filesystem::remove_all(dir);
 }
 
