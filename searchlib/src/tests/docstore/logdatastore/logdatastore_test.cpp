@@ -1618,6 +1618,11 @@ TEST_F(LogDataStoreTest, DISABLED_benchmark_startup_with_lid_map_image) {
         store.flush(syncToken);
         fprintf(stdout, "docs=%u files=%zu flush with image %.3f s, images=%zu\n", numDocs,
                 store.getFileChunkStats().size(), flushSeconds, list_lid_info_images(dir).size());
+        start = std::chrono::steady_clock::now();
+        store.compactBloat(serial);
+        double compactSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        fprintf(stdout, "compactBloat with image %.3f s, files=%zu, images=%zu\n", compactSeconds,
+                store.getFileChunkStats().size(), list_lid_info_images(dir).size());
         for (uint32_t lid = 1; lid <= 100000; ++lid) {
             write(lid * 13 % numDocs + 1);
         }
