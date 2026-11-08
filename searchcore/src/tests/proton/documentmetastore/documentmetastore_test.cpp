@@ -22,7 +22,11 @@
 #include <vespa/searchlib/query/query_term_simple.h>
 #include <vespa/searchlib/queryeval/blueprint.h>
 #include <vespa/searchlib/queryeval/simpleresult.h>
+#include <vespa/fastos/file.h>
+#include <vespa/searchlib/attribute/delta_checkpoint.h>
 #include <vespa/searchlib/util/disk_space_calculator.h>
+#include <vespa/searchlib/util/file_with_header.h>
+#include <vespa/searchlib/util/fileutil.h>
 #include <vespa/vespalib/gtest/gtest.h>
 #include <vespa/vespalib/util/exceptions.h>
 #include <vespa/vespalib/util/hw_info.h>
@@ -2438,6 +2442,141 @@ TEST(DocumentMetaStore, gid_to_lid_map_can_be_compacted) {
     static constexpr uint32_t full_size = 10000;
     verify_that_compaction_affects_memory_usage(full_size, full_size - 1, 100, 0,
                                                 &DocumentMetaStore::get_gid_to_lid_map_memory_usage);
+}
+
+namespace {
+
+const std::string delta_dir = "dms_delta_checkpoints";
+
+std::string dms_snapshot(const std::string& name) {
+    std::filesystem::create_directories(delta_dir + "/" + name);
+    return delta_dir + "/" + name + "/documentmetastore";
+}
+
+bool dms_is_delta(const std::string& base_file_name) {
+    search::FileWithHeader dat(search::FileUtil::openFile(base_file_name + ".dat"));
+    return search::attribute::DeltaCheckpoints::is_delta(dat.header());
+}
+
+void expect_same_dms(const DocumentMetaStore& exp, DocumentMetaStore& act) {
+    ASSERT_EQ(exp.getCommittedDocIdLimit(), act.getCommittedDocIdLimit());
+    ASSERT_EQ(exp.getNumUsedLids(), act.getNumUsedLids());
+    for (uint32_t lid = 1; lid < exp.getCommittedDocIdLimit(); ++lid) {
+        GlobalId exp_gid;
+        GlobalId act_gid;
+        ASSERT_EQ(exp.getGid(lid, exp_gid), act.getGid(lid, act_gid)) << "lid " << lid;
+        if (!exp.validLid(lid)) {
+            continue;
+        }
+        ASSERT_EQ(exp_gid, act_gid) << "lid " << lid;
+        uint32_t act_lid = 0;
+        ASSERT_TRUE(act.getLid(exp_gid, act_lid));
+        ASSERT_EQ(lid, act_lid);
+        DocumentMetadata exp_meta = exp.getMetadata(exp_gid);
+        DocumentMetadata act_meta = act.getMetadata(exp_gid);
+        ASSERT_EQ(exp_meta.bucketId, act_meta.bucketId) << "lid " << lid;
+        ASSERT_EQ(exp_meta.timestamp, act_meta.timestamp) << "lid " << lid;
+        ASSERT_EQ(exp.getRawMetadata(lid).getDocSize(), act.getRawMetadata(lid).getDocSize()) << "lid " << lid;
+        auto exp_bucket = exp.getBucketDB().takeGuard()->get(exp_meta.bucketId);
+        auto act_bucket = act.getBucketDB().takeGuard()->get(exp_meta.bucketId);
+        ASSERT_EQ(exp_bucket.getDocumentCount(), act_bucket.getDocumentCount());
+        ASSERT_EQ(exp_bucket.getChecksum(), act_bucket.getChecksum());
+    }
+}
+
+BucketId bucket_of(const DocumentId& docid) {
+    BucketId bucket_id(docid.getGlobalId().convertToBucketId());
+    bucket_id.setUsedBits(numBucketBits);
+    return bucket_id;
+}
+
+struct DmsDeltaFixture {
+    DocumentMetaStore dms;
+    DmsDeltaFixture() : dms(createBucketDB()) {
+        std::filesystem::remove_all(delta_dir);
+        dms.enable_delta_checkpoints();
+        dms.constructFreeList();
+        for (uint32_t lid = 1; lid <= 1000; ++lid) {
+            const auto docid = createDocId(lid);
+            EXPECT_EQ(lid, addDoc(dms, docid, bucket_of(docid), Timestamp(lid + timestampBias)));
+        }
+    }
+    ~DmsDeltaFixture() { std::filesystem::remove_all(delta_dir); }
+    void remove(uint32_t lid) {
+        EXPECT_TRUE(dms.remove(lid, 0u));
+        dms.removes_complete({lid});
+        dms.commit();
+    }
+    std::unique_ptr<DocumentMetaStore> load(const std::string& base_file_name) {
+        auto loaded = std::make_unique<DocumentMetaStore>(createBucketDB(), base_file_name);
+        EXPECT_TRUE(loaded->load());
+        loaded->constructFreeList();
+        return loaded;
+    }
+};
+
+} // namespace
+
+TEST(DocumentMetaStoreTest, a_delta_checkpoint_holds_puts_updates_removes_and_moves_since_the_full_checkpoint) {
+    DmsDeltaFixture f;
+    ASSERT_TRUE(f.dms.save(dms_snapshot("snapshot-1")));
+    f.remove(10);
+    f.remove(20);
+    f.remove(999);
+    for (uint32_t lid : {5u, 6u, 7u}) { // newer timestamps for existing documents
+        const auto docid = createDocId(lid);
+        EXPECT_EQ(lid, addDoc(f.dms, docid, bucket_of(docid), Timestamp(5000 + lid)));
+    }
+    EXPECT_TRUE(f.dms.updateMetadata(8, BucketId(numBucketBits + 1, createDocId(8).getGlobalId().convertToBucketId().getRawId()),
+                                     Timestamp(6000)));
+    const auto new_docid = createDocId(2000);
+    const uint32_t new_lid = addDoc(f.dms, new_docid, bucket_of(new_docid), Timestamp(7000));
+    EXPECT_EQ(10u, new_lid); // the free list hands out the lowest removed lid again
+    f.dms.move(createDocId(1000), 1000, 20, 0u);
+    f.dms.removes_complete({1000u});
+    f.dms.commit();
+
+    const auto delta = dms_snapshot("snapshot-2");
+    ASSERT_TRUE(f.dms.save(delta));
+    EXPECT_TRUE(dms_is_delta(delta));
+    EXPECT_LT(std::filesystem::file_size(delta + ".dat"), std::filesystem::file_size(delta + ".base.dat"));
+    std::filesystem::remove_all(delta_dir + "/snapshot-1");
+    expect_same_dms(f.dms, *f.load(delta));
+}
+
+TEST(DocumentMetaStoreTest, delta_checkpoints_are_cumulative_and_continue_after_loading_a_delta) {
+    DmsDeltaFixture f;
+    ASSERT_TRUE(f.dms.save(dms_snapshot("snapshot-1")));
+    f.remove(3);
+    ASSERT_TRUE(f.dms.save(dms_snapshot("snapshot-2")));
+    f.remove(4);
+    const auto second = dms_snapshot("snapshot-3");
+    ASSERT_TRUE(f.dms.save(second));
+    std::filesystem::remove_all(delta_dir + "/snapshot-1");
+    std::filesystem::remove_all(delta_dir + "/snapshot-2");
+    auto loaded = f.load(second);
+    expect_same_dms(f.dms, *loaded);
+
+    const auto docid = createDocId(3000);
+    EXPECT_EQ(3u, addDoc(*loaded, docid, bucket_of(docid), Timestamp(1)));
+    const auto third = dms_snapshot("snapshot-4");
+    ASSERT_TRUE(loaded->save(third));
+    EXPECT_TRUE(dms_is_delta(third));
+    std::filesystem::remove_all(delta_dir + "/snapshot-3");
+    expect_same_dms(*loaded, *f.load(third));
+}
+
+TEST(DocumentMetaStoreTest, a_full_checkpoint_is_written_when_the_delta_reaches_the_full_ratio) {
+    DmsDeltaFixture f;
+    ASSERT_TRUE(f.dms.save(dms_snapshot("snapshot-1")));
+    for (uint32_t lid = 1; lid <= 200; ++lid) {
+        f.remove(lid);
+    }
+    const auto next = dms_snapshot("snapshot-2");
+    ASSERT_TRUE(f.dms.save(next));
+    EXPECT_FALSE(dms_is_delta(next));
+    std::filesystem::remove_all(delta_dir + "/snapshot-1");
+    expect_same_dms(f.dms, *f.load(next));
 }
 
 } // namespace proton

@@ -18,6 +18,7 @@
 #include <vespa/searchcore/proton/bucketdb/joinbucketssession.h>
 #include <vespa/searchcore/proton/bucketdb/remove_batch_entry.h>
 #include <vespa/searchcore/proton/bucketdb/splitbucketsession.h>
+#include <vespa/searchlib/attribute/delta_checkpoint.h>
 #include <vespa/searchlib/attribute/load_utils.h>
 #include <vespa/searchlib/attribute/readerbase.h>
 #include <vespa/searchlib/common/i_gid_to_lid_mapper.h>
@@ -25,6 +26,7 @@
 #include <vespa/searchlib/queryeval/blueprint.h>
 #include <vespa/searchlib/util/bufferwriter.h>
 #include <vespa/searchlib/util/disk_space_calculator.h>
+#include <vespa/searchlib/util/fileutil.h>
 #include <vespa/vespalib/datastore/dynamic_array_buffer_type.h>
 #include <vespa/vespalib/util/exceptions.h>
 
@@ -36,6 +38,10 @@
 #include <vespa/vespalib/datastore/array_store.hpp>
 #include <vespa/vespalib/datastore/buffer_type.hpp>
 #include <vespa/vespalib/util/type_stable_vector.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstring>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".proton.documentmetastore");
@@ -53,6 +59,8 @@ using search::FileWithHeader;
 using search::GrowStrategy;
 using search::IAttributeSaveTarget;
 using search::LidUsageStats;
+using search::attribute::DeltaCheckpoints;
+using search::attribute::DeltaCheckpointSaver;
 using search::attribute::LoadUtils;
 using search::attribute::SearchContext;
 using search::attribute::SearchContextParams;
@@ -75,6 +83,18 @@ namespace documentmetastore {
 
 std::string DOCID_LIMIT("docIdLimit");
 std::string VERSION("version");
+
+struct LoadedEntry {
+    uint32_t  lid = 0;
+    GlobalId  gid;
+    uint8_t   bucket_used_bits = 0;
+    uint32_t  doc_size = 0;
+    Timestamp timestamp;
+};
+
+// A delta checkpoint entry on disk: lid, gid, bucket used bits, document size, timestamp, packed.
+constexpr size_t delta_entry_size = sizeof(uint32_t) + GlobalId::LENGTH + 1 + sizeof(uint32_t) + sizeof(uint64_t);
+const std::string delta_removed_tag = "delta.removed";
 
 class Reader {
 private:
@@ -129,6 +149,62 @@ public:
     uint64_t size_on_disk() const noexcept { return _datFile.size_on_disk(); }
     std::chrono::steady_clock::duration flush_duration() const noexcept { return _datFile.flush_duration(); }
     [[nodiscard]] uint32_t get_version() const noexcept { return _version; }
+    const vespalib::GenericHeader& header() const { return _datFile.header(); }
+    uint64_t data_size() const noexcept { return _datFile.data_size(); }
+    void read(void* buf, size_t size) { _datFile.file().ReadBuf(buf, size); }
+
+    LoadedEntry next() {
+        LoadedEntry entry;
+        entry.lid = getNextLid();
+        entry.gid = getNextGid();
+        entry.bucket_used_bits = getNextBucketUsedBits();
+        entry.doc_size = getNextDocSize();
+        entry.timestamp = getNextTimestamp();
+        return entry;
+    }
+};
+
+/*
+ * The entries of a full checkpoint, or of a delta checkpoint merged with its base, in gid to lid map order.
+ * A delta lists its changed entries in that order, and every lid it changed or removed is skipped in the base.
+ */
+class EntrySource {
+    Reader&                         _base;
+    size_t                          _base_left;
+    const std::vector<LoadedEntry>& _delta;
+    size_t                          _delta_pos;
+    const std::vector<bool>&        _skip;
+    bool                            _have_base;
+    LoadedEntry                     _base_entry;
+    GlobalId::BucketOrderCmp        _cmp;
+
+    void advance_base() {
+        _have_base = false;
+        while (_base_left > 0) {
+            --_base_left;
+            _base_entry = _base.next();
+            if (_base_entry.lid >= _skip.size() || !_skip[_base_entry.lid]) {
+                _have_base = true;
+                return;
+            }
+        }
+    }
+
+public:
+    EntrySource(Reader& base, const std::vector<LoadedEntry>& delta, const std::vector<bool>& skip)
+        : _base(base), _base_left(base.getNumElems()), _delta(delta), _delta_pos(0), _skip(skip), _have_base(false),
+          _base_entry(), _cmp() {
+        advance_base();
+    }
+    bool empty() const { return !_have_base && _delta_pos == _delta.size(); }
+    LoadedEntry next() {
+        if (_delta_pos < _delta.size() && (!_have_base || _cmp(_delta[_delta_pos].gid, _base_entry.gid))) {
+            return _delta[_delta_pos++];
+        }
+        LoadedEntry entry = _base_entry;
+        advance_base();
+        return entry;
+    }
 };
 
 Reader::Reader(std::unique_ptr<FastOS_FileInterface> datFile)
@@ -223,6 +299,7 @@ void DocumentMetaStore::insert(GidToLidMapKey key, const RawDocumentMetadata& me
     auto lid = key.get_lid();
     ensureSpace(lid);
     _metadataStore[lid] = metadata;
+    note_changed(lid);
     _gidToLidMap.insert(_gid_to_lid_map_write_itr, key, BTreeNoLeafData());
     // flush writes to meta store type stable vector before new entry is visible
     // from frozen root or lid based scan
@@ -333,6 +410,9 @@ void DocumentMetaStore::reclaim_memory(Generation oldest_used_gen) {
 }
 
 std::unique_ptr<search::AttributeSaver> DocumentMetaStore::onInitSave(std::string_view fileName) {
+    if (_delta_checkpoints && !_store_full_document_id) {
+        return init_delta_checkpoint_save(fileName);
+    }
     auto guard(getGuard());
     auto gid_view = _gidToLidMap.getFrozenView();
     auto metadata_view = make_metadata_view();
@@ -343,20 +423,83 @@ std::unique_ptr<search::AttributeSaver> DocumentMetaStore::onInitSave(std::strin
                                                     gid_view.begin(), metadata_view, std::move(docid_saver));
 }
 
-DocumentMetaStore::DocId DocumentMetaStore::readNextDoc(documentmetastore::Reader&      reader,
-                                                        documentmetastore::DocIdReader* docid_reader,
-                                                        TreeType::Builder&              treeBuilder) {
-    uint32_t lid(reader.getNextLid());
-    CHECK(lid < reader.getDocIdLimit());
+std::unique_ptr<search::AttributeSaver> DocumentMetaStore::init_delta_checkpoint_save(std::string_view fileName) {
+    // Called by the master thread, which also makes every change: the delta is a consistent snapshot.
+    const uint32_t docIdLimit = getCommittedDocIdLimit();
+    auto&          lids = _changed_since_full_checkpoint;
+    std::sort(lids.begin(), lids.end());
+    lids.erase(std::unique(lids.begin(), lids.end()), lids.end());
+    lids.erase(std::lower_bound(lids.begin(), lids.end(), docIdLimit), lids.end());
+    const DeltaCheckpoints::Base base = _delta_checkpoints->base();
+    const double full_bytes = double(getNumUsedLids()) * entry_size(true, true);
+    if (base.id != 0 && lids.size() * double(documentmetastore::delta_entry_size) < DeltaCheckpoints::full_ratio() * full_bytes) {
+        std::vector<uint32_t> valid;
+        std::vector<uint32_t> removed;
+        for (uint32_t lid : lids) {
+            (validLid(lid) ? valid : removed).push_back(lid);
+        }
+        GlobalId::BucketOrderCmp cmp;
+        std::sort(valid.begin(), valid.end(), [this, &cmp](uint32_t a, uint32_t b) {
+            return cmp(_metadataStore[a].getGid(), _metadataStore[b].getGid());
+        });
+        std::vector<std::byte> records(valid.size() * documentmetastore::delta_entry_size);
+        std::byte*             out = records.data();
+        auto                   put = [&out](const void* data, size_t size) {
+            memcpy(out, data, size);
+            out += size;
+        };
+        for (uint32_t lid : valid) {
+            const RawDocumentMetadata& meta = _metadataStore[lid];
+            const uint8_t              bucket_used_bits = meta.getBucketUsedBits();
+            const uint32_t             doc_size = meta.getDocSize();
+            const uint64_t             timestamp = meta.getTimestamp();
+            put(&lid, sizeof(lid));
+            put(meta.getGid().get(), GlobalId::LENGTH);
+            put(&bucket_used_bits, sizeof(bucket_used_bits));
+            put(&doc_size, sizeof(doc_size));
+            put(&timestamp, sizeof(timestamp));
+        }
+        auto header = createAttributeHeader(fileName);
+        header.get_extra_tags().putTag(
+            vespalib::GenericHeader::Tag(documentmetastore::delta_removed_tag, static_cast<uint64_t>(removed.size())));
+        return DeltaCheckpointSaver::delta(header, _delta_checkpoints, base, valid.size(),
+                                           {std::span<const std::byte>(records), std::as_bytes(std::span(removed))});
+    }
+    // A full checkpoint: deltas are based on it once it is saved, and on nothing until then.
+    _delta_checkpoints->clear_base();
+    lids.clear();
+    const uint64_t id = DeltaCheckpoints::make_checkpoint_id();
+    auto           header = createAttributeHeader(fileName);
+    header.get_extra_tags().putTag(vespalib::GenericHeader::Tag(DeltaCheckpoints::checkpoint_id_tag, id));
+    auto guard(getGuard());
+    auto gid_view = _gidToLidMap.getFrozenView();
+    auto saver = std::make_unique<DocumentMetaStoreSaver>(std::move(guard), header, gid_view.begin(),
+                                                          make_metadata_view(), std::unique_ptr<DocumentIdSaver>());
+    saver->become_delta_checkpoint_base(_delta_checkpoints, id);
+    return saver;
+}
+
+void DocumentMetaStore::enable_delta_checkpoints() {
+    if (!_delta_checkpoints) {
+        _delta_checkpoints = std::make_shared<DeltaCheckpoints>();
+    }
+}
+
+DocumentMetaStore::DocId DocumentMetaStore::readNextDoc(const documentmetastore::LoadedEntry& entry,
+                                                        uint32_t                              docIdLimit,
+                                                        documentmetastore::DocIdReader*       docid_reader,
+                                                        TreeType::Builder&                    treeBuilder) {
+    uint32_t lid(entry.lid);
+    CHECK(lid < docIdLimit);
     RawDocumentMetadata& meta = _metadataStore[lid];
-    meta.setGid(reader.getNextGid());
-    meta.setBucketUsedBits(reader.getNextBucketUsedBits());
-    uint32_t doc_size = reader.getNextDocSize();
+    meta.setGid(entry.gid);
+    meta.setBucketUsedBits(entry.bucket_used_bits);
+    uint32_t doc_size = entry.doc_size;
     if (!_track_32bit_document_sizes) {
         doc_size = RawDocumentMetadata::capped_doc_size24(doc_size);
     }
     meta.setDocSize(doc_size);
-    meta.setTimestamp(reader.getNextTimestamp());
+    meta.setTimestamp(entry.timestamp);
     if (docid_reader) {
         const auto ref = add_docid_string(docid_reader->get_next_docid());
         meta.set_docid_ref(ref);
@@ -373,27 +516,69 @@ bool DocumentMetaStore::onLoad(vespalib::Executor*) {
         auto file = LoadUtils::openFile(*this, DocumentMetaStoreSaver::docid_file_suffix());
         docid_reader = std::make_unique<documentmetastore::DocIdReader>(std::move(file));
     }
-    documentmetastore::Reader reader(LoadUtils::openDAT(*this));
+    documentmetastore::Reader              dat(LoadUtils::openDAT(*this));
+    const bool                             is_delta = DeltaCheckpoints::is_delta(dat.header());
+    std::unique_ptr<documentmetastore::Reader> base;
+    std::vector<documentmetastore::LoadedEntry> delta;
+    std::vector<uint32_t>                  delta_removed;
+    if (is_delta) {
+        // A delta that doesn't match its base can't be repaired from the transaction log, which is pruned up to
+        // this checkpoint: fail loudly.
+        CHECK(!docid_reader);
+        const uint64_t base_id = dat.header().getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger();
+        base = std::make_unique<documentmetastore::Reader>(
+            search::FileUtil::openFile(getBaseFileName() + DeltaCheckpoints::base_suffix));
+        CHECK(base->header().hasTag(DeltaCheckpoints::checkpoint_id_tag));
+        CHECK(static_cast<uint64_t>(base->header().getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger()) == base_id);
+        const size_t entries = dat.header().getTag(DeltaCheckpoints::delta_entries_tag).asInteger();
+        const size_t removed = dat.header().getTag(documentmetastore::delta_removed_tag).asInteger();
+        CHECK(dat.data_size() == entries * documentmetastore::delta_entry_size + removed * sizeof(uint32_t));
+        delta.resize(entries);
+        for (auto& entry : delta) {
+            uint64_t timestamp;
+            dat.read(&entry.lid, sizeof(entry.lid));
+            std::array<uint8_t, GlobalId::LENGTH> gid;
+            dat.read(gid.data(), gid.size());
+            entry.gid = GlobalId(gid.data());
+            dat.read(&entry.bucket_used_bits, sizeof(entry.bucket_used_bits));
+            dat.read(&entry.doc_size, sizeof(entry.doc_size));
+            dat.read(&timestamp, sizeof(timestamp));
+            entry.timestamp = Timestamp(timestamp);
+        }
+        delta_removed.resize(removed);
+        dat.read(delta_removed.data(), removed * sizeof(uint32_t));
+    }
+    documentmetastore::Reader& reader = is_delta ? *base : dat;
+    std::vector<bool>          skip(is_delta ? dat.getDocIdLimit() : 0);
+    for (const auto& entry : delta) {
+        CHECK(entry.lid < skip.size());
+        skip[entry.lid] = true;
+    }
+    for (uint32_t lid : delta_removed) {
+        CHECK(lid < skip.size());
+        skip[lid] = true;
+    }
+    documentmetastore::EntrySource entries(reader, delta, skip);
     unload();
-    size_t numElems = reader.getNumElems();
-    size_t docIdLimit = reader.getDocIdLimit();
+    size_t numElems = reader.getNumElems() + delta.size();
+    size_t docIdLimit = dat.getDocIdLimit();
     _metadataStore.unsafe_reserve(std::max(numElems, docIdLimit));
     TreeType::Builder treeBuilder(_gidToLidMap.getAllocator());
     CHECK(docIdLimit > 0); // lid 0 is reserved
     ensureSpace(docIdLimit - 1);
 
     // insert gids (already sorted)
-    if (numElems > 0) {
+    if (!entries.empty()) {
         _requires_document_ids_from_docstore = _store_full_document_id && !docid_reader;
         _requires_doc_sizes_from_docstore =
             consider_require_doc_sizes_from_docstore(reader, _trackDocumentSizes, _track_32bit_document_sizes);
-        DocId                      lid = readNextDoc(reader, docid_reader.get(), treeBuilder);
+        DocId                      lid = readNextDoc(entries.next(), docIdLimit, docid_reader.get(), treeBuilder);
         const RawDocumentMetadata* meta = &_metadataStore[lid];
         BucketId                   prevId(meta->getBucketId());
         BucketState                state;
         state.add(meta->getGid(), meta->getTimestamp(), meta->getDocSize(), _subDbType);
-        for (size_t i = 1; i < numElems; ++i) {
-            lid = readNextDoc(reader, docid_reader.get(), treeBuilder);
+        while (!entries.empty()) {
+            lid = readNextDoc(entries.next(), docIdLimit, docid_reader.get(), treeBuilder);
             meta = &_metadataStore[lid];
             BucketId bucketId = meta->getBucketId();
             if (prevId != bucketId) {
@@ -412,8 +597,23 @@ bool DocumentMetaStore::onLoad(vespalib::Executor*) {
 
     setNumDocs(_metadataStore.size());
     setCommittedDocIdLimit(_metadataStore.size());
-    uint64_t size_on_disk = DiskSpaceCalculator::directory_placeholder_size() + reader.size_on_disk();
-    std::chrono::steady_clock::duration flush_duration = reader.flush_duration();
+    uint64_t size_on_disk = DiskSpaceCalculator::directory_placeholder_size() + dat.size_on_disk() +
+                            (is_delta ? base->size_on_disk() : 0);
+    std::chrono::steady_clock::duration flush_duration = dat.flush_duration();
+    if (is_delta) {
+        enable_delta_checkpoints();
+        const uint64_t base_id = dat.header().getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger();
+        _delta_checkpoints->set_base({getBaseFileName() + DeltaCheckpoints::base_suffix, base_id});
+        for (const auto& entry : delta) {
+            _changed_since_full_checkpoint.push_back(entry.lid);
+        }
+        _changed_since_full_checkpoint.insert(_changed_since_full_checkpoint.end(), delta_removed.begin(),
+                                              delta_removed.end());
+    } else if (dat.header().hasTag(DeltaCheckpoints::checkpoint_id_tag)) {
+        enable_delta_checkpoints();
+        const uint64_t id = dat.header().getTag(DeltaCheckpoints::checkpoint_id_tag).asInteger();
+        _delta_checkpoints->set_base({getBaseFileName() + ".dat", id});
+    }
     if (docid_reader) {
         size_on_disk += docid_reader->size_on_disk();
         flush_duration += docid_reader->flush_duration();
@@ -443,6 +643,7 @@ typename TreeView::Iterator DocumentMetaStore::upperBound(const BucketId& bucket
 
 void DocumentMetaStore::updateMetadataAndBucketDB(const GlobalId& gid, DocId lid,
                                                   const RawDocumentMetadata& newMetadata) {
+    note_changed(lid);
     RawDocumentMetadata& oldMetadata = _metadataStore[lid];
     _bucketDB->takeGuard()->modify(gid, oldMetadata.getBucketId().stripUnused(), oldMetadata.getTimestamp(),
                                    oldMetadata.getDocSize(), newMetadata.getBucketId().stripUnused(),
@@ -467,6 +668,7 @@ void unloadBucket(bucketdb::BucketDBOwner& db, const BucketId& id, const BucketS
 } // namespace
 
 void DocumentMetaStore::unload() {
+    _changed_since_full_checkpoint.clear();
     TreeType::Iterator itr = _gidToLidMap.begin();
     if (!itr.valid()) {
         return;
@@ -527,7 +729,12 @@ DocumentMetaStore::DocumentMetaStore(BucketDBOwnerSP bucketDB, const std::string
       _op_listener(),
       _should_compact_gid_to_lid_map(false),
       _store_full_document_id(store_full_document_id),
-      _requires_document_ids_from_docstore(false) {
+      _requires_document_ids_from_docstore(false),
+      _delta_checkpoints(),
+      _changed_since_full_checkpoint() {
+    if (DeltaCheckpoints::enabled()) {
+        enable_delta_checkpoints();
+    }
     ensureSpace(0);                       // lid 0 is reserved
     setCommittedDocIdLimit(1u);           // lid 0 is reserved
     _gidToLidMap.getAllocator().freeze(); // create initial frozen tree
@@ -640,6 +847,7 @@ bool DocumentMetaStore::updateMetadata(DocId lid, const BucketId& bucketId, Time
     if (!validLid(lid)) {
         return false;
     }
+    note_changed(lid);
     RawDocumentMetadata& metadata = _metadataStore[lid];
     _bucketDB->takeGuard()->modify(metadata.getGid(), metadata.getBucketId().stripUnused(), metadata.getTimestamp(),
                                    metadata.getDocSize(), bucketId.stripUnused(), storage::spi::Timestamp(timestamp),
@@ -682,6 +890,7 @@ RawDocumentMetadata DocumentMetaStore::removeInternal(DocId lid, uint64_t prepar
     }
     _gidToLidMap.remove(itr);
     _lidAlloc.unregisterLid(lid);
+    note_changed(lid);
     return _metadataStore[lid];
 }
 
@@ -718,6 +927,8 @@ void DocumentMetaStore::move(const document::DocumentId& docid, DocId fromLid, D
     CHECK(validLid(fromLid));
     _lidAlloc.moveLidBegin(fromLid, toLid);
     _metadataStore[toLid] = _metadataStore[fromLid];
+    note_changed(fromLid);
+    note_changed(toLid);
     if (_store_full_document_id) {
         _metadataStore[fromLid].set_docid_ref(EntryRef());
         auto& metadata = _metadataStore[toLid];
@@ -787,6 +998,9 @@ void DocumentMetaStore::removeBatch(const std::vector<DocId>& lidsToRemove, cons
     }
     remove_batch_internal_btree(removed);
     _lidAlloc.unregister_lids(lidsToRemove);
+    for (DocId lid : lidsToRemove) {
+        note_changed(lid);
+    }
     {
         std::vector<RemoveBatchEntry> bdb_removed;
         bdb_removed.reserve(removed.size());
@@ -1005,6 +1219,7 @@ bucketdb::BucketDeltaPair DocumentMetaStore::handleSplit(const bucketdb::SplitBu
             if (target2.valid()) {
                 t2.setUsedBits(target2.getUsedBits());
             }
+            note_changed(lid);
             if (target1.valid() && t1 == target1) {
                 metadata.setBucketUsedBits(target1.getUsedBits());
                 deltas._delta1.add(metadata.getGid(), metadata.getTimestamp(), metadata.getDocSize(), _subDbType);
@@ -1032,6 +1247,7 @@ bucketdb::BucketDeltaPair DocumentMetaStore::handleJoin(const bucketdb::JoinBuck
         RawDocumentMetadata& metadata = _metadataStore[lid];
         CHECK(BucketId::validUsedBits(metadata.getBucketUsedBits()));
         BucketId s(metadata.getBucketId());
+        note_changed(lid);
         if (source1.valid() && s == source1) {
             metadata.setBucketUsedBits(target.getUsedBits());
             deltas._delta1.add(metadata.getGid(), metadata.getTimestamp(), metadata.getDocSize(), _subDbType);
@@ -1116,6 +1332,10 @@ void DocumentMetaStore::onShrinkLidSpace() {
     _lidAlloc.shrinkLidSpace(committedDocIdLimit);
     _metadataStore.shrink(committedDocIdLimit);
     setNumDocs(committedDocIdLimit);
+    if (_delta_checkpoints) {
+        // Lids past the new limit that are added again must not read their old metadata from the base.
+        _delta_checkpoints->clear_base();
+    }
 }
 
 size_t DocumentMetaStore::getEstimatedShrinkLidSpaceGain() const {
