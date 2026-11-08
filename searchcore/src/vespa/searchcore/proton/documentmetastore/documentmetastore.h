@@ -142,6 +142,8 @@ private:
     void load_image(vespalib::image::ImageReader& reader) override;
     void save_image_bucket_states(vespalib::nbostream& os) const;
     void load_image_bucket_states(vespalib::nbostream& is);
+    void save_image_active_state(vespalib::image::ImageWriter& writer) const;
+    void load_image_active_state(vespalib::image::ImageReader& reader);
     void rebuild_bucket_states();
 
     template <typename TreeView>
