@@ -216,6 +216,12 @@ DocumentDB::DocumentDB(const std::string& baseDir, DocumentDBConfig::SP configSn
     loaded_config = DocumentDBConfigScout::scout(loaded_config, *_pendingConfigSnapshot.get());
     // Ignore configs that are not relevant during replay of transaction log
     loaded_config = DocumentDBConfig::makeReplayConfig(loaded_config);
+    if (serve_during_replay() && (*loaded_config == *DocumentDBConfig::makeReplayConfig(configSnapshot))) {
+        // Queries served during replay need rank profiles and summary config, which the saved config does not
+        // keep. When the parts replay depends on are unchanged, start from the live config instead.
+        LOG(info, "DocumentDB(%s): Using the live config during transaction log replay", _docTypeName.toString().c_str());
+        loaded_config = configSnapshot;
+    }
 
     _initConfigSnapshot = loaded_config;
     _initConfigSerialNum = configSerial;
@@ -816,7 +822,9 @@ void DocumentDB::replayConfig(search::SerialNum serialNum) {
     // Grab relevant parts from pending config
     configSnapshot = DocumentDBConfigScout::scout(configSnapshot, *_pendingConfigSnapshot.get());
     // Ignore configs that are not relevant during replay of transaction log
-    configSnapshot = DocumentDBConfig::makeReplayConfig(configSnapshot);
+    if (!serve_during_replay()) {
+        configSnapshot = DocumentDBConfig::makeReplayConfig(configSnapshot);
+    }
     auto prepared_reconfig = prepare_reconfig(*configSnapshot, serialNum);
     applyConfig(configSnapshot, serialNum, std::move(prepared_reconfig));
     LOG(info, "DocumentDB(%s): Replayed config with serialNum=%" PRIu64, _docTypeName.toString().c_str(), serialNum);
