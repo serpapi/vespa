@@ -10,6 +10,11 @@
 
 #include <span>
 
+namespace vespalib::image {
+class ImageReader;
+class ImageWriter;
+} // namespace vespalib::image
+
 namespace vespalib {
 
 template <typename T> class TypeStableVectorHeld : public GenerationHeldBase {
@@ -152,6 +157,10 @@ public:
     void shrink(size_t newSize) __attribute__((noinline));
     void replaceVector(ArrayType replacement);
     ArrayType create_replacement_vector() const { return _data.create(); }
+
+    // Memory images (image_file.h). Writer only. load_image() maps the saved elements instead of reading them.
+    void save_image(image::ImageWriter& writer) const;
+    void load_image(image::ImageReader& reader);
 };
 
 template <typename T> class TypeStableVector final : public TypeStableVectorBase<T> {

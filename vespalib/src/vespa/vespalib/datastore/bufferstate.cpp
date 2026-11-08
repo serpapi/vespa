@@ -106,6 +106,31 @@ void BufferState::on_active(uint32_t bufferId, uint32_t typeId, BufferTypeBase* 
                            buffer.load(std::memory_order::relaxed));
 }
 
+void BufferState::restore_active(uint32_t bufferId, uint32_t typeId, BufferTypeBase* typeHandler, Alloc&& memory,
+                                 size_t used_entries, size_t dead_entries, std::atomic<void*>& buffer) {
+    CHECK(buffer.load(std::memory_order_relaxed) == nullptr);
+    CHECK(getState() == State::FREE);
+    CHECK(_typeHandler == nullptr);
+    CHECK(_free_list.empty());
+    auto buffer_underflow_size = typeHandler->buffer_underflow_size();
+    CHECK(memory.size() >= buffer_underflow_size);
+    size_t alloc_entries = (memory.size() - buffer_underflow_size) / typeHandler->entry_size();
+    CHECK(used_entries <= alloc_entries);
+    _buffer = std::move(memory);
+    buffer.store(get_buffer(buffer_underflow_size), std::memory_order_release);
+    _stats.set_alloc_entries(alloc_entries);
+    _typeHandler.store(typeHandler, std::memory_order_release);
+    CHECK(typeId <= std::numeric_limits<uint16_t>::max());
+    _typeId = typeId;
+    _arraySize = typeHandler->getArraySize();
+    _state.store(State::ACTIVE, std::memory_order_release);
+    // Registers the buffer with its type. This also rewrites the reserved entries, which hold the same bytes.
+    typeHandler->on_active(bufferId, &_stats.used_entries_ref(), &_stats.dead_entries_ref(),
+                           buffer.load(std::memory_order::relaxed));
+    _stats.used_entries_ref().store(used_entries, std::memory_order_relaxed);
+    _stats.set_dead_entries(dead_entries);
+}
+
 void BufferState::onHold(uint32_t buffer_id) {
     CHECK(getState() == State::ACTIVE);
     auto type_handler = getTypeHandler();

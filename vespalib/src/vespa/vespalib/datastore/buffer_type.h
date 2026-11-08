@@ -4,6 +4,8 @@
 
 #include "atomic_entry_ref.h"
 
+#include <vespa/vespalib/util/image_file.h>
+
 #include <string>
 #include <vector>
 
@@ -47,6 +49,8 @@ public:
                    float allocGrowFactor) noexcept;
     virtual ~BufferTypeBase();
     virtual void destroy_entries(void* buffer, EntryCount num_entries) = 0;
+    // Whether this type's buffers can be saved and loaded as memory images (vespalib/util/image_file.h).
+    virtual bool image_copyable() const noexcept { return false; }
     virtual void fallback_copy(void* newBuffer, const void* oldBuffer, EntryCount num_entries) = 0;
 
     /**
@@ -164,6 +168,7 @@ public:
                float allocGrowFactor) noexcept;
     ~BufferType() override;
     void destroy_entries(void* buffer, EntryCount num_entries) override;
+    bool image_copyable() const noexcept override { return image::image_copyable_v<ElemT>; }
     void fallback_copy(void* newBuffer, const void* oldBuffer, EntryCount num_entries) override;
     void initialize_reserved_entries(void* buffer, EntryCount reserved_entries) override;
     void clean_hold(void* buffer, size_t offset, EntryCount num_entries, CleanContext cleanCxt) override;

@@ -2,6 +2,9 @@
 
 #include "datastorebase.h"
 
+#include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/util/image_file.h>
+
 #include "compact_buffer_candidates.h"
 #include "compacting_buffers.h"
 #include "compaction_spec.h"
@@ -489,6 +492,125 @@ void DataStoreBase::merge_stash_memory_usage(vespalib::MemoryUsage& usage) const
     uint32_t chunks = (buffer_states + buffer_states_per_chunk - 1) / buffer_states_per_chunk;
     usage.incAllocatedBytes(chunks * chunk_size);
     usage.incUsedBytes(buffer_states * stashed_buffer_state_size + chunks * sizeof(stash::Chunk));
+}
+
+
+namespace {
+constexpr uint32_t DATASTORE_IMAGE_MAGIC = 0x44534931; // "DSI1"
+}
+
+bool DataStoreBase::can_save_image() const noexcept {
+    uint32_t buffer_id_limit = _bufferIdLimit.load(std::memory_order_relaxed);
+    for (uint32_t i = 0; i < buffer_id_limit; ++i) {
+        const BufferState* state = _buffers[i].get_state_acquire();
+        if (state == nullptr || !state->isActive()) {
+            continue;
+        }
+        if (state->getCompacting() || !state->getTypeHandler()->image_copyable() ||
+            state->stats().extra_used_bytes() != 0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool DataStoreBase::save_image(image::ImageWriter& writer) {
+    if (!can_save_image()) {
+        return false;
+    }
+    auto&    meta = writer.meta();
+    uint32_t buffer_id_limit = get_bufferid_limit_relaxed();
+    meta << DATASTORE_IMAGE_MAGIC << uint32_t(_typeHandlers.size()) << buffer_id_limit
+         << uint64_t(_compaction_count.load(std::memory_order_relaxed));
+    for (uint32_t id : _primary_buffer_ids) {
+        meta << id;
+    }
+    uint32_t active = 0;
+    for_each_active_buffer([&active](uint32_t, const BufferState&) { ++active; });
+    meta << active;
+    for (uint32_t id = 0; id < buffer_id_limit; ++id) {
+        BufferState* state = _buffers[id].get_state_relaxed();
+        if (state == nullptr || !state->isActive()) {
+            continue;
+        }
+        const BufferTypeBase* type_handler = state->getTypeHandler();
+        size_t underflow = type_handler->buffer_underflow_size();
+        size_t used_bytes = underflow + state->size() * type_handler->entry_size();
+        auto   section = writer.write_section(state->get_alloc().get(), used_bytes);
+        const auto& refs = state->free_refs();
+        meta << id << uint32_t(state->getTypeId()) << uint64_t(state->get_alloc().size()) << uint64_t(state->size())
+             << uint64_t(state->stats().dead_entries() + state->stats().hold_entries()) << section
+             << uint64_t(refs.size());
+        for (auto ref : refs) {
+            meta << ref.ref();
+        }
+    }
+    return true;
+}
+
+void DataStoreBase::load_image(image::ImageReader& reader) {
+    auto&    meta = reader.meta();
+    uint32_t magic = 0, num_types = 0, buffer_id_limit = 0, active = 0;
+    uint64_t compaction_count = 0;
+    meta >> magic >> num_types >> buffer_id_limit >> compaction_count;
+    if (magic != DATASTORE_IMAGE_MAGIC || num_types != _typeHandlers.size() || buffer_id_limit > _buffers.size()) {
+        throw vespalib::IllegalStateException("Memory image does not match this data store");
+    }
+    std::vector<uint32_t> primary(num_types);
+    for (auto& id : primary) {
+        meta >> id;
+    }
+    meta >> active;
+    dropBuffers();
+    for (uint32_t i = 0; i < active; ++i) {
+        uint32_t       id = 0, type_id = 0;
+        uint64_t       alloc_bytes = 0, used = 0, dead = 0, num_free = 0;
+        image::Section section;
+        meta >> id >> type_id >> alloc_bytes >> used >> dead >> section >> num_free;
+        if (id >= buffer_id_limit || type_id >= num_types) {
+            throw vespalib::IllegalStateException("Memory image has a bad buffer entry");
+        }
+        BufferTypeBase* type_handler = _typeHandlers[type_id];
+        BufferAndMeta&  buffer_meta = _buffers[id];
+        BufferState*    state = buffer_meta.get_state_relaxed();
+        if (state == nullptr) {
+            auto& new_state = _stash.create<BufferState>();
+            if (_disable_entry_hold_list) {
+                new_state.disable_entry_hold_list();
+            }
+            if (!_freeListsEnabled) {
+                new_state.disable_free_list();
+            }
+            state = &new_state;
+            buffer_meta.set_state(state);
+        }
+        auto memory = reader.map(section, alloc_bytes, type_handler->get_memory_allocator());
+        state->restore_active(id, type_id, type_handler, std::move(memory), used, dead,
+                              buffer_meta.get_atomic_buffer());
+        buffer_meta.setTypeId(type_id);
+        if (type_handler->is_dynamic_array_buffer_type()) {
+            buffer_meta.set_entry_size(type_handler->entry_size());
+        } else {
+            buffer_meta.set_array_size(state->getArraySize());
+        }
+        bool free_list = _freeListsEnabled && !state->getCompacting();
+        if (free_list) {
+            state->enable_free_list(_free_lists[type_id]);
+        }
+        for (uint64_t f = 0; f < num_free; ++f) {
+            uint32_t ref = 0;
+            meta >> ref;
+            if (free_list) {
+                state->push_free_ref(EntryRef(ref));
+            }
+        }
+    }
+    _primary_buffer_ids = primary;
+    if (buffer_id_limit > _bufferIdLimit.load(std::memory_order_relaxed)) {
+        _bufferIdLimit.store(buffer_id_limit, std::memory_order_release);
+    }
+    _compaction_count.store(compaction_count, std::memory_order_relaxed);
 }
 
 } // namespace vespalib::datastore

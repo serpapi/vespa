@@ -64,6 +64,7 @@ vespa_add_library(vespalib_vespalib_util OBJECT
     memory_trap.cpp
     memoryusage.cpp
     mimalloc_intercept.cpp
+    image_file.cpp
     mmap_file_allocator.cpp
     mmap_file_allocator_factory.cpp
     monitored_refcount.cpp

@@ -131,6 +131,7 @@ public:
     reverse_iterator rend() noexcept { return empty() ? array(0) : array(0) - 1; }
     size_t size() const noexcept { return _sz; }
     size_t capacity() const noexcept { return _array.size() / sizeof(T); }
+    const Alloc& get_alloc() const noexcept { return _array; }
     void clear() {
         std::destroy(array(0), array(_sz));
         _sz = 0;

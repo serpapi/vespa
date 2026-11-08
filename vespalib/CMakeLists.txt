@@ -168,6 +168,7 @@ vespa_define_module(
     src/tests/unwind_message
     src/tests/util
     src/tests/util/generationhandler_stress
+    src/tests/util/image_file
     src/tests/util/hamming
     src/tests/util/md5
     src/tests/util/mimalloc

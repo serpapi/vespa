@@ -3,6 +3,8 @@
 #pragma once
 
 #include "type_stable_vector.h"
+#include "image_file.h"
+#include "exceptions.h"
 
 #include <vespa/check_require.h>
 
@@ -151,4 +153,23 @@ template <typename T> MemoryUsage TypeStableVector<T>::getMemoryUsage() const no
     return retval;
 }
 
+template <typename T> void TypeStableVectorBase<T>::save_image(image::ImageWriter& writer) const {
+    static_assert(image::image_copyable_v<T>, "Memory images need trivially copyable elements");
+    auto section = writer.write_section(_data.data(), _data.size() * sizeof(T));
+    writer.meta() << uint64_t(_data.size()) << uint64_t(_data.capacity()) << section;
+}
+
+template <typename T> void TypeStableVectorBase<T>::load_image(image::ImageReader& reader) {
+    uint64_t       size = 0;
+    uint64_t       capacity = 0;
+    image::Section section;
+    reader.meta() >> size >> capacity >> section;
+    if (section.length != size * sizeof(T) || capacity < size) {
+        throw IllegalStateException("Memory image of TypeStableVector does not match its element type");
+    }
+    auto memory = reader.map(section, capacity * sizeof(T), _data.get_alloc().get_allocator());
+    replaceVector(ArrayType(std::move(memory), size));
+}
+
 } // namespace vespalib
+

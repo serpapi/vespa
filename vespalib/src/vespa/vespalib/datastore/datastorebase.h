@@ -14,6 +14,11 @@
 #include <atomic>
 #include <vector>
 
+namespace vespalib::image {
+class ImageReader;
+class ImageWriter;
+} // namespace vespalib::image
+
 namespace vespalib::datastore {
 
 class CompactingBuffers;
@@ -179,6 +184,16 @@ public:
     uint32_t get_entry_size(uint32_t type_id) noexcept { return _typeHandlers[type_id]->entry_size(); }
 
     void* getBuffer(uint32_t bufferId) noexcept { return _buffers[bufferId].get_buffer_relaxed(); }
+
+    /*
+     * Memory images (vespalib/util/image_file.h). Called by the writer with no readers depending on held entries
+     * (entries on hold are saved as dead). save_image() returns false, writing nothing, if a buffer type holds
+     * owning pointers. load_image() replaces all buffers with mappings of the saved ones, keeping buffer ids,
+     * so every EntryRef saved elsewhere stays valid.
+     */
+    bool can_save_image() const noexcept;
+    bool save_image(image::ImageWriter& writer);
+    void load_image(image::ImageReader& reader);
 
 protected:
     DataStoreBase(uint32_t numBuffers, uint32_t offset_bits, size_t max_entries);

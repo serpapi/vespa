@@ -70,6 +70,13 @@ public:
     static Alloc alloc(size_t sz, size_t mmapLimit, size_t alignment = 0) noexcept;
     static Alloc alloc() noexcept;
     static Alloc alloc_with_allocator(const MemoryAllocator* allocator) noexcept;
+    // Takes ownership of memory that allocator->free() can release (used by memory images, image_file.h).
+    static Alloc adopt(const MemoryAllocator* allocator, PtrAndSize memory) noexcept {
+        Alloc result(allocator);
+        result._alloc = memory;
+        return result;
+    }
+    const MemoryAllocator* get_allocator() const noexcept { return _allocator; }
 
 private:
     Alloc(const MemoryAllocator* allocator, size_t sz) noexcept

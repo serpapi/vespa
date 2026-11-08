@@ -37,6 +37,7 @@ public:
 
     bool enabled() const noexcept { return _free_list != nullptr; }
     bool empty() const noexcept { return _free_refs.empty(); }
+    const EntryRefArray& refs() const noexcept { return _free_refs; }
     void push_entry(EntryRef ref);
     EntryRef pop_entry() noexcept;
 };

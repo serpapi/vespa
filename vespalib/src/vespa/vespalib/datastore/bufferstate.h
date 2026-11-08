@@ -72,6 +72,16 @@ public:
                    std::atomic<void*>& buffer);
 
     /**
+     * Transition from FREE to ACTIVE state with memory loaded from a memory image (vespalib/util/image_file.h)
+     * instead of a new allocation. The entries are not initialized: they are the image's.
+     */
+    void restore_active(uint32_t bufferId, uint32_t typeId, BufferTypeBase* typeHandler, Alloc&& memory,
+                        size_t used_entries, size_t dead_entries, std::atomic<void*>& buffer);
+    const Alloc& get_alloc() const noexcept { return _buffer; }
+    const std::vector<EntryRef>& free_refs() const noexcept { return _free_list.refs(); }
+    void push_free_ref(EntryRef ref) { _free_list.push_entry(ref); }
+
+    /**
      * Transition from ACTIVE to HOLD state.
      */
     void onHold(uint32_t buffer_id);
