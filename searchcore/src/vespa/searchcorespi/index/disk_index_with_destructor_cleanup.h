@@ -7,25 +7,31 @@
 
 #include <mutex>
 
+namespace vespalib {
+class Executor;
+}
+
 namespace searchcorespi::index {
 
 class DiskIndexes;
 class IndexDiskLayout;
 
 /*
- * A disk index wrapper that removes the disk index if it is old and unused when the wrapper is destroyed.
+ * A disk index wrapper that, when destroyed, has the remover delete the disk index if it is old and unused.
  */
 
 class DiskIndexWithDestructorCleanup : public IDiskIndex {
 private:
-    std::shared_ptr<std::mutex>      _remove_lock;
-    std::shared_ptr<IDiskIndex>      _index;
-    IndexDiskDir                     _index_disk_dir;
-    std::shared_ptr<IndexDiskLayout> _layout;
-    std::shared_ptr<DiskIndexes>     _disk_indexes;
+    std::shared_ptr<std::mutex>         _remove_lock;
+    std::shared_ptr<vespalib::Executor> _remover; // runs the removal of old index directories
+    std::shared_ptr<IDiskIndex>         _index;
+    IndexDiskDir                        _index_disk_dir;
+    std::shared_ptr<IndexDiskLayout>    _layout;
+    std::shared_ptr<DiskIndexes>        _disk_indexes;
 
 public:
-    DiskIndexWithDestructorCleanup(std::shared_ptr<std::mutex> remove_lock, std::shared_ptr<IDiskIndex> index,
+    DiskIndexWithDestructorCleanup(std::shared_ptr<std::mutex> remove_lock, std::shared_ptr<vespalib::Executor> remover,
+                                   std::shared_ptr<IDiskIndex>      index,
                                    std::shared_ptr<IndexDiskLayout> layout,
                                    std::shared_ptr<DiskIndexes>     disk_indexes) noexcept;
     DiskIndexWithDestructorCleanup(const DiskIndexWithDestructorCleanup&) = delete;

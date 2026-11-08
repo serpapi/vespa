@@ -177,6 +177,9 @@ struct IndexManagerTest : public ::testing::Test {
     void assertStats(uint32_t expNumDiskIndexes, uint32_t expNumMemoryIndexes, SerialNum expLastDiskIndexSerialNum,
                      SerialNum expLastMemoryIndexSerialNum);
 
+    // Old index directories are removed by the index remover, after the last reference to them is dropped.
+    void sync_index_removal() { _index_manager->getMaintainer().getIndexRemover().sync(); }
+
     IIndexCollection::SP get_source_collection() const {
         return _index_manager->getMaintainer().getSourceCollection();
     }
@@ -552,6 +555,7 @@ TEST_F(IndexManagerTest, require_that_flush_triggers_fusion) {
     target->initFlush(0, std::make_shared<search::FlushToken>())->run();
     addDocument(docid);
     flushIndexManager();
+    sync_index_removal();
     set<uint32_t> fusion_ids = readDiskIds(index_dir, "fusion");
     EXPECT_EQ(1u, fusion_ids.size());
     EXPECT_EQ(5u, *fusion_ids.begin());
@@ -595,6 +599,7 @@ TEST_F(IndexManagerTest, require_that_fusion_cleans_up_old_indexes) {
     fusion_spec.flush_ids.push_back(1);
     fusion_spec.flush_ids.push_back(2);
     _index_manager->getMaintainer().runFusion(fusion_spec, std::make_shared<search::FlushToken>());
+    sync_index_removal();
 
     flush_ids = readDiskIds(index_dir, "flush");
     EXPECT_EQ(1u, flush_ids.size());
@@ -617,6 +622,34 @@ bool contains(const IIndexCollection& fsc, uint32_t id) {
 bool indexExists(const string& type, uint32_t id) {
     set<uint32_t> disk_ids = readDiskIds(index_dir, type);
     return disk_ids.find(id) != disk_ids.end();
+}
+
+TEST_F(IndexManagerTest, old_indexes_are_removed_by_the_index_remover_not_by_the_thread_dropping_the_last_reference) {
+    addDocument(docid);
+    flushIndexManager();
+    // A query running on index.flush.1 when fusion completes
+    auto fsc = get_source_collection();
+    addDocument(docid + 1);
+    flushIndexManager();
+    FusionSpec fusion_spec;
+    fusion_spec.flush_ids = {1, 2};
+    _index_manager->getMaintainer().runFusion(fusion_spec, std::make_shared<search::FlushToken>());
+    sync_index_removal();
+    ASSERT_TRUE(indexExists("flush", 1));
+
+    vespalib::Gate remover_blocked;
+    vespalib::Gate release_remover;
+    _index_manager->getMaintainer().getIndexRemover().execute(makeLambdaTask([&]() {
+        remover_blocked.countDown();
+        release_remover.await();
+    }));
+    remover_blocked.await();
+    fsc.reset(); // the query completes and drops the last reference to index.flush.1
+    EXPECT_TRUE(indexExists("flush", 1));
+    release_remover.countDown();
+    sync_index_removal();
+    EXPECT_FALSE(indexExists("flush", 1));
+    EXPECT_TRUE(indexExists("fusion", 2));
 }
 
 TEST_F(IndexManagerTest, require_that_disk_indexes_are_loaded_on_startup) {

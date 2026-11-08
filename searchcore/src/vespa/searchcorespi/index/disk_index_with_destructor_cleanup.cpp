@@ -7,14 +7,17 @@
 #include "indexdisklayout.h"
 
 #include <vespa/searchlib/queryeval/blueprint.h>
+#include <vespa/vespalib/util/lambdatask.h>
 
 namespace searchcorespi::index {
 
-DiskIndexWithDestructorCleanup::DiskIndexWithDestructorCleanup(std::shared_ptr<std::mutex>      remove_lock,
-                                                               std::shared_ptr<IDiskIndex>      index,
-                                                               std::shared_ptr<IndexDiskLayout> layout,
-                                                               std::shared_ptr<DiskIndexes>     disk_indexes) noexcept
+DiskIndexWithDestructorCleanup::DiskIndexWithDestructorCleanup(std::shared_ptr<std::mutex>         remove_lock,
+                                                               std::shared_ptr<vespalib::Executor> remover,
+                                                               std::shared_ptr<IDiskIndex>         index,
+                                                               std::shared_ptr<IndexDiskLayout>    layout,
+                                                               std::shared_ptr<DiskIndexes>        disk_indexes) noexcept
     : _remove_lock(std::move(remove_lock)),
+      _remover(std::move(remover)),
       _index(std::move(index)),
       _index_disk_dir(IndexDiskLayout::get_index_disk_dir(_index->getIndexDir())),
       _layout(std::move(layout)),
@@ -25,8 +28,16 @@ DiskIndexWithDestructorCleanup::~DiskIndexWithDestructorCleanup() {
     auto index_dir = _index->getIndexDir();
     _index.reset();
     _disk_indexes->notActive(index_dir);
-    std::lock_guard remove_guard(*_remove_lock);
-    DiskIndexCleaner::removeOldIndexes(_layout->get_base_dir(), *_disk_indexes);
+    // The last reference is often dropped by a query thread. Removing an old fused index unlinks gigabytes of
+    // page cache, which that query would wait for (1.1-2 s per fusion on a 50M-doc node), so remove elsewhere.
+    auto remove = vespalib::makeLambdaTask(
+        [remove_lock = _remove_lock, layout = _layout, disk_indexes = _disk_indexes]() {
+            std::lock_guard remove_guard(*remove_lock);
+            DiskIndexCleaner::removeOldIndexes(layout->get_base_dir(), *disk_indexes);
+        });
+    if (auto rejected = _remover->execute(std::move(remove))) {
+        rejected->run(); // the remover is shut down
+    }
 }
 
 std::unique_ptr<search::queryeval::Blueprint>
