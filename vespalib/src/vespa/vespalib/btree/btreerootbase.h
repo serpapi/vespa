@@ -6,6 +6,8 @@
 #include "btreenodeallocator.h"
 #include "btreetraits.h"
 
+#include <vespa/vespalib/objects/nbostream.h>
+
 #include <atomic>
 
 namespace vespalib::btree {
@@ -42,6 +44,17 @@ public:
         if (oldFrozen && !isFrozen()) {
             allocator.needFreeze(this);
         }
+    }
+
+    // Memory images: the root refs. The nodes are saved with the allocator.
+    void save_image_root(vespalib::nbostream& os) const {
+        os << _root.ref() << _frozenRoot.load(std::memory_order_relaxed);
+    }
+    void load_image_root(vespalib::nbostream& is) {
+        uint32_t root = 0, frozen_root = 0;
+        is >> root >> frozen_root;
+        _root = BTreeNode::Ref(root);
+        _frozenRoot.store(frozen_root, std::memory_order_release);
     }
 
     void prepare_hold() {

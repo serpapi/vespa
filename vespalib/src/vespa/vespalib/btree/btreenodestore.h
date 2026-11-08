@@ -36,6 +36,11 @@ public:
     void initialize_reserved_entries(void* buffer, EntryCount reserved_entries) override;
 
     void clean_hold(void* buffer, size_t offset, EntryCount num_entries, CleanContext cleanCtx) override;
+
+    // Nodes hold keys, data and refs only; their destructor just checks that the node is frozen.
+    bool image_copyable() const noexcept override {
+        return image::image_copyable_v<typename EntryType::KeyType> && image::image_copyable_v<typename EntryType::DataType>;
+    }
 };
 
 template <typename KeyT, typename DataT, typename AggrT, size_t INTERNAL_SLOTS, size_t LEAF_SLOTS>
@@ -65,6 +70,11 @@ public:
 
     void disableFreeLists() noexcept { _store.disableFreeLists(); }
     void disable_entry_hold_list() { _store.disable_entry_hold_list(); }
+
+    // Memory images (vespalib/util/image_file.h). Node refs stay valid across save and load.
+    bool can_save_image() const noexcept { return _store.can_save_image(); }
+    bool save_image(image::ImageWriter& writer) { return _store.save_image(writer); }
+    void load_image(image::ImageReader& reader) { _store.load_image(reader); }
 
     static bool isValidRef(EntryRef ref) noexcept { return ref.valid(); }
 

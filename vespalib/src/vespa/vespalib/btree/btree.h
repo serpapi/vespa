@@ -6,6 +6,7 @@
 #include "noaggrcalc.h"
 
 #include <vespa/check_require.h>
+#include <vespa/vespalib/util/image_file.h>
 
 namespace vespalib::datastore {
 class CompactionStrategy;
@@ -43,6 +44,16 @@ public:
     void disableFreeLists() { _alloc.disableFreeLists(); }
     void disable_entry_hold_list() { _alloc.disable_entry_hold_list(); }
     void clear() { _tree.clear(_alloc); }
+    // Memory images (vespalib/util/image_file.h). Writer only, right after a freeze.
+    bool can_save_image() const noexcept { return _tree.isFrozen() && _alloc.can_save_image(); }
+    void save_image(image::ImageWriter& writer) {
+        _tree.save_image_root(writer.meta());
+        _alloc.save_image(writer);
+    }
+    void load_image(image::ImageReader& reader) {
+        _tree.load_image_root(reader.meta());
+        _alloc.load_image(reader);
+    }
     void assign(Builder& rhs) { _tree.assign(rhs, _alloc); }
     bool insert(const KeyType& key, const DataType& data, CompareT comp = CompareT()) {
         return _tree.insert(key, data, _alloc, comp);

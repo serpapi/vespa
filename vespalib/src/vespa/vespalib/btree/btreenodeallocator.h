@@ -53,6 +53,14 @@ public:
 
     void disable_entry_hold_list() { _nodeStore.disable_entry_hold_list(); }
 
+    // Memory images (vespalib/util/image_file.h). Only when every node is frozen, i.e. right after freeze().
+    bool can_save_image() const noexcept {
+        return _internalToFreeze.empty() && _leafToFreeze.empty() && _treeToFreeze.empty() &&
+               _internalHoldUntilFreeze.empty() && _leafHoldUntilFreeze.empty() && _nodeStore.can_save_image();
+    }
+    bool save_image(image::ImageWriter& writer) { return can_save_image() && _nodeStore.save_image(writer); }
+    void load_image(image::ImageReader& reader) { _nodeStore.load_image(reader); }
+
     /**
      * Allocate internal node.
      */

@@ -1,5 +1,13 @@
 // Copyright Vespa.ai. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
+#include <vespa/vespalib/btree/btree.h>
+#include <vespa/vespalib/btree/btreeroot.hpp>
+#include <vespa/vespalib/btree/btreenodeallocator.hpp>
+#include <vespa/vespalib/btree/btree.hpp>
+#include <vespa/vespalib/btree/btreenodestore.hpp>
+#include <vespa/vespalib/btree/btreebuilder.hpp>
+#include <vespa/vespalib/btree/btreenode.hpp>
+#include <vespa/vespalib/btree/btreeiterator.hpp>
 #include <vespa/vespalib/datastore/datastore.h>
 #include <vespa/vespalib/gtest/gtest.h>
 #include <vespa/vespalib/util/generationholder.h>
@@ -112,6 +120,44 @@ TEST(ImageFileTest, data_store_round_trip_keeps_refs_and_free_lists) {
     auto fresh = loaded.addEntry(99);
     EXPECT_EQ(99u, loaded.getEntry(fresh));
     EXPECT_EQ(1u + 2000 * 3, loaded.getEntry(refs[2000]));
+    std::filesystem::remove(path);
+}
+
+TEST(ImageFileTest, btree_round_trip_keeps_lookups_and_accepts_inserts) {
+    using Tree = vespalib::btree::BTree<uint32_t, uint32_t>;
+    auto path = image_path("btree");
+    {
+        Tree tree;
+        for (uint32_t i = 0; i < 200000; ++i) {
+            tree.insert(i * 2, i);
+        }
+        tree.getAllocator().freeze();
+        tree.getAllocator().assign_generation(Generation(1));
+        tree.getAllocator().reclaim_memory(Generation(2));
+        ASSERT_TRUE(tree.can_save_image());
+        ImageWriter writer(path);
+        tree.save_image(writer);
+        writer.finish();
+    }
+    Tree loaded;
+    {
+        ImageReader reader(path);
+        loaded.load_image(reader);
+    }
+    EXPECT_EQ(200000u, loaded.size());
+    for (uint32_t i = 0; i < 200000; i += 997) {
+        auto itr = loaded.find(i * 2);
+        ASSERT_TRUE(itr.valid());
+        EXPECT_EQ(i, itr.getData());
+        EXPECT_FALSE(loaded.find(i * 2 + 1).valid());
+    }
+    for (uint32_t i = 0; i < 1000; ++i) {
+        loaded.insert(i * 2 + 1, i + 7);
+    }
+    loaded.getAllocator().freeze();
+    EXPECT_EQ(201000u, loaded.size());
+    EXPECT_EQ(7u, loaded.find(1).getData());
+    EXPECT_EQ(5u, loaded.find(10).getData());
     std::filesystem::remove(path);
 }
 
