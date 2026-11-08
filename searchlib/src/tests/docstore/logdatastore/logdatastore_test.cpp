@@ -25,6 +25,8 @@
 #include <vespa/vespalib/util/size_literals.h>
 #include <vespa/vespalib/util/threadstackexecutor.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <random>
@@ -1477,6 +1479,74 @@ TEST_F(LogDataStoreTest, lid_map_image_is_removed_by_compaction_and_written_agai
     ImageFixture f(dir, true);
     EXPECT_TRUE(f.store.loaded_lid_info_image());
     EXPECT_EQ(content, describe_content(f.store));
+    std::filesystem::remove_all(dir);
+}
+
+namespace {
+
+double open_seconds(const std::string& dir, bool useImages, bool expectImage) {
+    vespalib::ThreadStackExecutor executor(1);
+    DummyFileHeaderContext        fileHeaderCtx;
+    MyTlSyncer                    tlSyncer;
+    auto                          start = std::chrono::steady_clock::now();
+    LogDataStore store(executor, dir, LogDataStore::Config().setUseImages(useImages), GrowStrategy(),
+                       TuneFileSummary(), fileHeaderCtx, tlSyncer, nullptr);
+    std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+    double                        seconds = elapsed.count();
+    EXPECT_EQ(expectImage, store.loaded_lid_info_image());
+    return seconds;
+}
+
+} // namespace
+
+// Startup time with and without a lid map image. Run with --gtest_also_run_disabled_tests, LDS_IMAGE_BENCH_DOCS=N.
+TEST_F(LogDataStoreTest, DISABLED_benchmark_startup_with_lid_map_image) {
+    const char* docsEnv = std::getenv("LDS_IMAGE_BENCH_DOCS");
+    uint32_t    numDocs = (docsEnv != nullptr) ? std::stoul(docsEnv) : 5000000u;
+    auto        dir = build_testdata() + "/image_bench";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directory(dir);
+    {
+        vespalib::ThreadStackExecutor executor(1);
+        DummyFileHeaderContext        fileHeaderCtx;
+        MyTlSyncer                    tlSyncer;
+        LogDataStore store(executor, dir, LogDataStore::Config().setUseImages(true), GrowStrategy(),
+                           TuneFileSummary(), fileHeaderCtx, tlSyncer, nullptr);
+        uint64_t     serial = 0;
+        std::mt19937 rng(42);
+        std::string  data(64, '\0');
+        auto         write = [&](uint32_t lid) {
+            for (char& c : data) {
+                c = 'a' + char(rng() % 26);
+            }
+            store.write(++serial, lid, data.c_str(), data.size());
+        };
+        for (uint32_t lid = 1; lid <= numDocs; ++lid) {
+            write(lid);
+        }
+        for (uint32_t lid = 1; lid <= numDocs; lid += 20) {
+            store.remove(++serial, lid);
+        }
+        auto     start = std::chrono::steady_clock::now();
+        uint64_t syncToken = store.initFlush(serial);
+        store.flush(syncToken);
+        double flushSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        for (uint32_t lid = 1; lid <= 100000; ++lid) {
+            write(lid * 7 % numDocs + 1);
+        }
+        syncToken = store.initFlush(serial);
+        store.flush(syncToken);
+        fprintf(stdout, "docs=%u files=%zu flush with image %.3f s, images=%zu\n", numDocs,
+                store.getFileChunkStats().size(), flushSeconds, list_lid_info_images(dir).size());
+        for (uint32_t lid = 1; lid <= 100000; ++lid) {
+            write(lid * 13 % numDocs + 1);
+        }
+    }
+    for (int round = 0; round < 3; ++round) {
+        double stock = open_seconds(dir, false, false);
+        double image = open_seconds(dir, true, true);
+        fprintf(stdout, "round %d: open from .idx files %.3f s, open from image %.3f s\n", round, stock, image);
+    }
     std::filesystem::remove_all(dir);
 }
 
